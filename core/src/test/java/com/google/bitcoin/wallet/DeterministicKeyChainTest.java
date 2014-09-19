@@ -17,16 +17,21 @@
 package com.google.bitcoin.wallet;
 
 import com.google.bitcoin.core.*;
+import com.google.bitcoin.crypto.ChildNumber;
 import com.google.bitcoin.crypto.DeterministicHierarchy;
 import com.google.bitcoin.crypto.DeterministicKey;
+import com.google.bitcoin.crypto.HDKeyDerivation;
 import com.google.bitcoin.params.UnitTestParams;
 import com.google.bitcoin.store.UnreadableWalletException;
 import com.google.bitcoin.utils.BriefLogFormatter;
 import com.google.bitcoin.utils.Threading;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import org.bitcoinj.wallet.Protos;
 import org.junit.Before;
 import org.junit.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.spongycastle.crypto.params.KeyParameter;
 
 import java.io.IOException;
@@ -37,8 +42,27 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static org.junit.Assert.*;
 
 public class DeterministicKeyChainTest {
+    private static final Logger log = LoggerFactory.getLogger(DeterministicKeyChainTest.class);
+
     private DeterministicKeyChain chain;
     private final byte[] ENTROPY = Sha256Hash.create("don't use a string seed like this in real life".getBytes()).getBytes();
+
+     private static final String TREZOR_SEED_PHRASE = "sniff divert demise scrub pony motor struggle innocent model mask enroll settle cash junior denial harsh peasant update estate aspect lyrics season empower asset";
+
+     // m/44'/0'/0'/0/0
+     private static final String EXPECTED_ADDRESS_0 = "1MkTpZN4TpLwJjZt9zHBXREJA8avUHXB3q";
+
+     // m/44'/0'/0'/0/1
+     private static final String EXPECTED_ADDRESS_1 = "1WGmwv86m1fFNVDRQ2YagdAFCButd36SV";
+
+     // m/44'/0'/0'/0/2
+     private static final String EXPECTED_ADDRESS_2 = "1PP1BvDeXjUcPDiEHBPWptQBAukhAwsLFt";
+
+     // m/44'/0'/0'/0/3
+     private static final String EXPECTED_ADDRESS_3 = "128f69V7GRqNSKwrjMkcuB6dbFKKEPtaLC";
+
+     // m/44'/0'/0'/0/4
+     private static final String EXPECTED_ADDRESS_4 = "18dxk72otf2amyAsjiKnEWhox5CJGQHYGA";
 
     @Before
     public void setup() {
@@ -254,6 +278,72 @@ public class DeterministicKeyChainTest {
         chain = DeterministicKeyChain.fromProtobuf(serialization, null).get(0);
         final DeterministicKey rekey4 = chain.getKey(KeyChain.KeyPurpose.CHANGE);
         assertEquals(key4.getPubKeyPoint(), rekey4.getPubKeyPoint());
+    }
+
+  /**
+   * Test that a chain can be created for an account other than the HD account 0 of the BIP32 spec.
+   * In this test a chain pointing to account 44 is created and some addresses tested.
+   * This is a BIP44/ Trezor compatible chain. See https://github.com/bitcoin/bips/blob/master/bip-0044.mediawiki
+   * @throws UnreadableWalletException
+   */
+    @Test
+    public void accountChain() throws UnreadableWalletException {
+        NetworkParameters mainnet = NetworkParameters.fromID(NetworkParameters.ID_MAINNET);
+
+        long secs = 1389353062L;
+        DeterministicSeed seed = new DeterministicSeed(TREZOR_SEED_PHRASE, "", secs);
+        DeterministicKey privateMasterKey = HDKeyDerivation.createMasterPrivateKey(seed.getSeedBytes());
+
+        DeterministicKey key_m_44h = HDKeyDerivation.deriveChildKey(privateMasterKey, new ChildNumber(44 | ChildNumber.HARDENED_BIT));
+        System.out.println("DeterministicKeyChainTest#accountChain key_m_44h deterministic key = " + key_m_44h);
+
+        DeterministicKey key_m_44h_0h = HDKeyDerivation.deriveChildKey(key_m_44h, ChildNumber.ZERO_HARDENED);
+        System.out.println("DeterministicKeyChainTest#accountChain key_m_44h_0h deterministic key = " + key_m_44h_0h);
+
+        DeterministicHierarchy deterministicHierarchy = new DeterministicHierarchy(key_m_44h_0h);
+
+        DeterministicKey key_m_44h_0h_0h = deterministicHierarchy.deriveChild(key_m_44h_0h.getPath(), false, false, new ChildNumber(0, true));
+        System.out.println("DeterministicKeyChainTest#accountChain key_m_44h_0h_0h = " + key_m_44h_0h_0h);
+
+        ImmutableList<ChildNumber> key_m_44h_0h_0h_path = key_m_44h_0h_0h.getPath();
+        System.out.println("DeterministicKeyChainTest#accountChain key_m_44h_0h_0h_path = " + key_m_44h_0h_0h_path);
+
+        DeterministicKeyChain accountChain = new DeterministicKeyChain(seed, key_m_44h_0h_0h_path);
+        System.out.println("DeterministicKeyChainTest#accountChain accountChain = " + accountChain);
+
+        accountChain.setLookaheadSize(10);
+        assertNotNull(accountChain.getSeed());
+        assertEquals(secs, accountChain.getSeed().getCreationTimeSeconds());
+
+        Utils.setMockClock();
+
+        // Check the seed phrase given generates the expected BIP44 addresses
+        DeterministicKey key0 = accountChain.getKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
+        System.out.println("DeterministicKeyChainTest#accountChain m/44'/0'/0'/0/0 key = " + key0);
+
+        DeterministicKey key1 = accountChain.getKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
+        System.out.println("DeterministicKeyChainTest#accountChain m/44'/0'/0'/0/1 key = " + key0);
+
+        DeterministicKey key2 = accountChain.getKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
+        System.out.println("DeterministicKeyChainTest#accountChain m/44'/0'/0'/0/2 key = " + key0);
+
+        DeterministicKey key3 = accountChain.getKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
+        System.out.println("DeterministicKeyChainTest#accountChain m/44'/0'/0'/0/3 key = " + key0);
+
+        DeterministicKey key4 = accountChain.getKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
+        System.out.println("DeterministicKeyChainTest#accountChain m/44'/0'/0'/0/4 key = " + key0);
+
+
+        assertEquals(EXPECTED_ADDRESS_0, key0.toAddress(mainnet).toString());
+        assertEquals(EXPECTED_ADDRESS_1, key1.toAddress(mainnet).toString());
+        assertEquals(EXPECTED_ADDRESS_2, key2.toAddress(mainnet).toString());
+        assertEquals(EXPECTED_ADDRESS_3, key3.toAddress(mainnet).toString());
+        assertEquals(EXPECTED_ADDRESS_4, key4.toAddress(mainnet).toString());
+
+        accountChain.setLookaheadSize(10);
+        accountChain.maybeLookAhead();
+
+        // TODO - check serialisation
     }
 
     @Test(expected = IllegalStateException.class)
