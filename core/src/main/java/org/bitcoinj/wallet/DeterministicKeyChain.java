@@ -287,7 +287,26 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
      * if the starting seed is the same.
      */
     protected DeterministicKeyChain(DeterministicSeed seed) {
-        this(seed, null);
+        this(seed, (KeyCrypter)null);
+    }
+
+  /**
+     * Creates a deterministic key chain starting from the given seed for a given account.
+     * Standard HD wallets start at the node from M/0/0'
+     * This constructor allows you to start creating keys from, say, m/44'/0'/0' (BIP 44)
+     * All keys yielded by this chain will be the same if the starting seed is the same.
+     * @param seed The seed to use for creation of the DeterministicKeyChain
+     * @param rootNodeList The BIP32 node which will be used as the root for key generation
+   *
+     */
+    protected DeterministicKeyChain(DeterministicSeed seed, ImmutableList<ChildNumber> rootNodeList) {
+      this.seed = seed;
+      basicKeyChain = new BasicKeyChain(null); // TODO keyCrypter = null ???
+      if (!seed.isEncrypted()) {
+          rootKey = HDKeyDerivation.createMasterPrivateKey(checkNotNull(seed.getSeedBytes()));
+          rootKey.setCreationTimeSeconds(seed.getCreationTimeSeconds());
+          initializeHierarchyUnencrypted(rootKey, rootNodeList);
+      }
     }
 
     /**
@@ -301,7 +320,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         basicKeyChain = new BasicKeyChain();
         this.creationTimeSeconds = creationTimeSeconds;
         this.seed = null;
-        initializeHierarchyUnencrypted(watchingKey);
+        initializeHierarchyUnencrypted(watchingKey, ACCOUNT_ZERO_PATH);
     }
 
     public DeterministicKeyChain(DeterministicKey watchingKey) {
@@ -350,7 +369,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         if (!seed.isEncrypted()) {
             rootKey = HDKeyDerivation.createMasterPrivateKey(checkNotNull(seed.getSeedBytes()));
             rootKey.setCreationTimeSeconds(seed.getCreationTimeSeconds());
-            initializeHierarchyUnencrypted(rootKey);
+            initializeHierarchyUnencrypted(rootKey, ACCOUNT_ZERO_PATH);
         }
         // Else...
         // We can't initialize ourselves with just an encrypted seed, so we expected deserialization code to do the
@@ -406,12 +425,12 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
 
     // Derives the account path keys and inserts them into the basic key chain. This is important to preserve their
     // order for serialization, amongst other things.
-    private void initializeHierarchyUnencrypted(DeterministicKey baseKey) {
+    private void initializeHierarchyUnencrypted(DeterministicKey baseKey, ImmutableList<ChildNumber> rootNodeList) {
         if (baseKey.getPath().isEmpty()) {
             // baseKey is a master/root key derived directly from a seed.
             addToBasicChain(rootKey);
             hierarchy = new DeterministicHierarchy(rootKey);
-            addToBasicChain(hierarchy.get(ACCOUNT_ZERO_PATH, false, true));
+            addToBasicChain(hierarchy.get(rootNodeList, false, true));
         } else if (baseKey.getPath().size() == 1) {
             // baseKey is a "watching key" that we were given so we could follow along with this account.
             rootKey = null;
@@ -420,8 +439,8 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         } else {
             throw new IllegalArgumentException();
         }
-        externalKey = hierarchy.deriveChild(ACCOUNT_ZERO_PATH, false, false, ChildNumber.ZERO);
-        internalKey = hierarchy.deriveChild(ACCOUNT_ZERO_PATH, false, false, ChildNumber.ONE);
+        externalKey = hierarchy.deriveChild(rootNodeList, false, false, ChildNumber.ZERO);
+        internalKey = hierarchy.deriveChild(rootNodeList, false, false, ChildNumber.ONE);
         addToBasicChain(externalKey);
         addToBasicChain(internalKey);
     }
