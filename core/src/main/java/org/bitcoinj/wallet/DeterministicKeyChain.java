@@ -249,6 +249,11 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
     }
 
     /**
+     * The root node of the DeterministicKeyChain
+     */
+    private final ImmutableList<ChildNumber> rootNodeList;
+
+    /**
      * Generates a new key chain with entropy selected randomly from the given {@link java.security.SecureRandom}
      * object and the default entropy size.
      */
@@ -301,6 +306,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
      */
     protected DeterministicKeyChain(DeterministicSeed seed, ImmutableList<ChildNumber> rootNodeList) {
       this.seed = seed;
+      this.rootNodeList = rootNodeList;
       basicKeyChain = new BasicKeyChain(null); // TODO keyCrypter = null ???
       if (!seed.isEncrypted()) {
           rootKey = HDKeyDerivation.createMasterPrivateKey(checkNotNull(seed.getSeedBytes()));
@@ -321,6 +327,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         basicKeyChain = new BasicKeyChain();
         this.creationTimeSeconds = creationTimeSeconds;
         this.seed = null;
+        this.rootNodeList = rootNodeList;
         initializeHierarchyUnencrypted(watchingKey, rootNodeList);
     }
 
@@ -365,7 +372,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         return watch(accountKey, DeterministicHierarchy.BIP32_STANDARDISATION_TIME_SECS);
     }
 
-    /**
+  /**
      * Creates a key chain that watches the given account key, and assumes there are no transactions involving it until
      * the given time (this is an optimisation for chain scanning purposes).
      */
@@ -373,8 +380,17 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         return new DeterministicKeyChain(accountKey, seedCreationTimeSecs);
     }
 
-    DeterministicKeyChain(DeterministicSeed seed, @Nullable KeyCrypter crypter) {
+  /**
+     * Creates a key chain that watches the given account key and rootNodeList, and assumes there are no transactions involving it until
+     * the given time (this is an optimisation for chain scanning purposes).
+     */
+    public static DeterministicKeyChain watch(DeterministicKey accountKey, long seedCreationTimeSecs, ImmutableList<ChildNumber> rootNodeList) {
+        return new DeterministicKeyChain(accountKey, seedCreationTimeSecs, rootNodeList);
+    }
+
+      DeterministicKeyChain(DeterministicSeed seed, @Nullable KeyCrypter crypter) {
         this.seed = seed;
+        this.rootNodeList = ACCOUNT_ZERO_PATH;
         basicKeyChain = new BasicKeyChain(crypter);
         if (!seed.isEncrypted()) {
             rootKey = HDKeyDerivation.createMasterPrivateKey(checkNotNull(seed.getSeedBytes()));
@@ -401,6 +417,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         this.lookaheadThreshold = chain.lookaheadThreshold;
 
         this.seed = chain.seed.encrypt(crypter, aesKey);
+        this.rootNodeList = ACCOUNT_ZERO_PATH;
         basicKeyChain = new BasicKeyChain(crypter);
         // The first number is the "account number" but we don't use that feature.
         rootKey = chain.rootKey.encrypt(crypter, aesKey, null);
@@ -630,13 +647,13 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
     }
 
     /**
-     * <p>An alias for <code>getKeyByPath(DeterministicKeyChain.ACCOUNT_ZERO_PATH).getPubOnly()</code>.
+     * <p>An alias for <code>getKeyByPath(rootNodeList).getPubOnly()</code>.
      * Use this when you would like to create a watching key chain that follows this one, but can't spend money from it.
      * The returned key can be serialized and then passed into {@link #watch(org.bitcoinj.crypto.DeterministicKey)}
      * on another system to watch the hierarchy.</p>
      */
     public DeterministicKey getWatchingKey() {
-        return getKeyByPath(ACCOUNT_ZERO_PATH).getPubOnly();
+        return getKeyByPath(rootNodeList, true).getPubOnly();
     }
 
     @Override

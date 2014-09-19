@@ -221,13 +221,22 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
         return new Wallet(params, new KeyChainGroup(params, seed));
     }
 
-    /**
-     * Creates a wallet that tracks payments to and from the HD key hierarchy rooted by the given watching key. A
-     * watching key corresponds to account zero in the recommended BIP32 key hierarchy.
-     */
-    public static Wallet fromWatchingKey(NetworkParameters params, DeterministicKey watchKey, long creationTimeSeconds) {
-        return new Wallet(params, new KeyChainGroup(params, watchKey, creationTimeSeconds));
-    }
+  /**
+    * Creates a wallet that tracks payments to and from the HD key hierarchy rooted by the given watching key. A
+    * watching key corresponds to account zero in the recommended BIP32 key hierarchy.
+    */
+   public static Wallet fromWatchingKey(NetworkParameters params, DeterministicKey watchKey, long creationTimeSeconds) {
+       return new Wallet(params, new KeyChainGroup(params, watchKey, creationTimeSeconds));
+   }
+
+  /**
+    * Creates a wallet that tracks payments to and from the HD key hierarchy rooted by the given watching key. A
+    * watching key corresponds to an account in the recommended BIP32 key hierarchy.
+    * @param rootNodeList the path corresponding to the root account node to use for the watching key
+    */
+   public static Wallet fromWatchingKey(NetworkParameters params, DeterministicKey watchKey, long creationTimeSeconds, ImmutableList<ChildNumber> rootNodeList) {
+       return new Wallet(params, new KeyChainGroup(params, watchKey, creationTimeSeconds, rootNodeList));
+   }
 
     /**
      * Creates a wallet that tracks payments to and from the HD key hierarchy rooted by the given watching key. A

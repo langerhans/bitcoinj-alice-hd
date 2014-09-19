@@ -96,12 +96,43 @@ public class KeyChainGroup implements KeyBag {
     }
 
     /**
-     * Creates a keychain group with no basic chain, and an HD chain that is watching the given watching key which
-     * was assumed to be first used at the given UNIX time.
-     * This HAS to be an account key as returned by {@link DeterministicKeyChain#getWatchingKey()}.
+     * Alice
+     * TODO Fill in comments
+     * @param params
+     * @param watchKey
+     * @param creationTimeSecondsSecs
      */
     public KeyChainGroup(NetworkParameters params, DeterministicKey watchKey, long creationTimeSecondsSecs) {
-        this(params, null, ImmutableList.of(DeterministicKeyChain.watch(watchKey, creationTimeSecondsSecs)), null, null);
+        this(params, null, ImmutableList.of(DeterministicKeyChain.watch(watchKey, creationTimeSecondsSecs)), null, null, 1, null);
+    }
+
+    /**
+     * Alice
+     * TODO Fill in comments
+     * @param params
+     * @param watchKey
+     * @param creationTimeSecondsSecs
+     * @param rootNodeList
+     */
+    public KeyChainGroup(NetworkParameters params, DeterministicKey watchKey, long creationTimeSecondsSecs, ImmutableList<ChildNumber> rootNodeList) {
+        this(params, null, ImmutableList.of(DeterministicKeyChain.watch(watchKey, creationTimeSecondsSecs, rootNodeList)), null, null, 1, null);
+    }
+
+    /**
+     * Alice
+     * TODO Fill in comments
+     *
+     * @param params
+     * @param keyChain
+     * @param chains
+     * @param currentKeys
+     * @param followingKeychains
+     * @param sigsRequiredToSpend
+     * @param crypter
+     */
+    public KeyChainGroup(NetworkParameters params, BasicKeyChain keyChain, ImmutableList<DeterministicKeyChain> chains, EnumMap<KeyChain.KeyPurpose, DeterministicKey> currentKeys, Multimap<DeterministicKey,
+      DeterministicKeyChain> followingKeychains, int sigsRequiredToSpend, KeyCrypter crypter) {
+      this(params, keyChain, chains, currentKeys, crypter);
     }
 
     // Used for deserialization.
@@ -125,7 +156,8 @@ public class KeyChainGroup implements KeyBag {
         }
     }
 
-    // This keeps married redeem data in sync with the number of keys issued
+
+  // This keeps married redeem data in sync with the number of keys issued
     private void maybeLookaheadScripts() {
         for (DeterministicKeyChain chain : chains) {
             chain.maybeLookAheadScripts();
