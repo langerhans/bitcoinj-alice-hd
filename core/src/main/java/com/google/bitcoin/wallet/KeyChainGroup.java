@@ -26,7 +26,6 @@ import com.google.bitcoin.script.ScriptBuilder;
 import com.google.bitcoin.store.UnreadableWalletException;
 import com.google.bitcoin.utils.ListenerRegistration;
 import com.google.bitcoin.utils.Threading;
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Joiner;
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableList;
@@ -106,7 +105,7 @@ public class KeyChainGroup implements KeyBag {
         this(params, null, ImmutableList.of(DeterministicKeyChain.watch(watchKey)), null, null, 1, null);
     }
 
-    /**
+  /**
      * Creates a keychain group with no basic chain, and an HD chain that is watching the given watching key which
      * was assumed to be first used at the given UNIX time.
      * This HAS to be an account key as returned by {@link DeterministicKeyChain#getWatchingKey()}.
@@ -115,7 +114,15 @@ public class KeyChainGroup implements KeyBag {
         this(params, null, ImmutableList.of(DeterministicKeyChain.watch(watchKey, creationTimeSecondsSecs)), null, null, 1, null);
     }
 
-    /**
+   /**
+     * Creates a keychain group with no basic chain, and an HD chain that is watching the given watching key which
+     * was assumed to be first used at the given UNIX time.
+     */
+    public KeyChainGroup(NetworkParameters params, DeterministicKey watchKey, long creationTimeSecondsSecs, ImmutableList<ChildNumber> rootNodeList) {
+        this(params, null, ImmutableList.of(DeterministicKeyChain.watch(watchKey, creationTimeSecondsSecs, rootNodeList)), null, null, 1, null);
+    }
+
+      /**
      * Creates a keychain group with no basic chain, with an HD chain initialized from the given seed and being followed
      * by given list of watch keys. Watch keys have to be account keys.
      */
