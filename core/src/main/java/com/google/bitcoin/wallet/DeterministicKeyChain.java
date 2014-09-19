@@ -200,18 +200,28 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
       }
     }
 
+  /**
+     * Creates a deterministic key chain that watches the given (public only) root key. You can use this to calculate
+     * balances and generally follow along, but spending is not possible with such a chain. Currently you can't use
+     * this method to watch an arbitrary fragment of some other tree, this limitation may be removed in future.
+     *
+     * This constructor allows the specification of the root node you want to watch from
+     */
+    public DeterministicKeyChain(DeterministicKey watchingKey, long creationTimeSeconds, ImmutableList<ChildNumber> rootNodeList) {
+        checkArgument(watchingKey.isPubKeyOnly(), "Private subtrees not currently supported");
+        basicKeyChain = new BasicKeyChain();
+        this.creationTimeSeconds = creationTimeSeconds;
+        this.seed = null;
+        initializeHierarchyUnencrypted(watchingKey, rootNodeList);
+    }
+
     /**
      * Creates a deterministic key chain that watches the given (public only) root key. You can use this to calculate
      * balances and generally follow along, but spending is not possible with such a chain. Currently you can't use
      * this method to watch an arbitrary fragment of some other tree, this limitation may be removed in future.
      */
     public DeterministicKeyChain(DeterministicKey watchingKey, long creationTimeSeconds) {
-        checkArgument(watchingKey.isPubKeyOnly(), "Private subtrees not currently supported");
-        checkArgument(watchingKey.getPath().size() == 1, "You can only watch an account key currently");
-        basicKeyChain = new BasicKeyChain();
-        this.creationTimeSeconds = creationTimeSeconds;
-        this.seed = null;
-        initializeHierarchyUnencrypted(watchingKey, ACCOUNT_ZERO_PATH);
+        this(watchingKey, creationTimeSeconds, ACCOUNT_ZERO_PATH);
     }
 
     public DeterministicKeyChain(DeterministicKey watchingKey) {
@@ -322,13 +332,11 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
             addToBasicChain(rootKey);
             hierarchy = new DeterministicHierarchy(rootKey);
             addToBasicChain(hierarchy.get(rootNodeList, false, true));
-        } else if (baseKey.getPath().size() == 1) {
+        } else {
             // baseKey is a "watching key" that we were given so we could follow along with this account.
             rootKey = null;
             addToBasicChain(baseKey);
             hierarchy = new DeterministicHierarchy(baseKey);
-        } else {
-            throw new IllegalArgumentException();
         }
         externalKey = hierarchy.deriveChild(rootNodeList, false, false, ChildNumber.ZERO);
         internalKey = hierarchy.deriveChild(rootNodeList, false, false, ChildNumber.ONE);
