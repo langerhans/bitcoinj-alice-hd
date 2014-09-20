@@ -235,17 +235,27 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         this(watchingKey, Utils.currentTimeSeconds());
     }
 
-    /**
-     * <p>Creates a deterministic key chain with the given watch key. If <code>isFollowing</code> flag is set then this keychain follows
-     * some other keychain. In a married wallet following keychain represents "spouse's" keychain.</p>
-     * <p>Watch key has to be an account key.</p>
-     */
-    private DeterministicKeyChain(DeterministicKey watchKey, boolean isFollowing) {
-        this(watchKey, Utils.currentTimeSeconds());
-        this.isFollowing = isFollowing;
-    }
+  /**
+    * <p>Creates a deterministic key chain with the given watch key. If <code>isFollowing</code> flag is set then this keychain follows
+    * some other keychain. In a married wallet following keychain represents "spouse's" keychain.</p>
+    * <p>Watch key has to be an account key.</p>
+    */
+   private DeterministicKeyChain(DeterministicKey watchKey, boolean isFollowing) {
+       this(watchKey, Utils.currentTimeSeconds());
+       this.isFollowing = isFollowing;
+   }
 
-    /**
+  /**
+    * <p>Creates a deterministic key chain with the given watch key. If <code>isFollowing</code> flag is set then this keychain follows
+    * some other keychain. In a married wallet following keychain represents "spouse's" keychain.</p>
+    * <p>Watch key has to be an account key with the given rootNode</p>
+    */
+   private DeterministicKeyChain(DeterministicKey watchKey, boolean isFollowing, ImmutableList<ChildNumber> rootNode) {
+       this(watchKey, Utils.currentTimeSeconds(), rootNode);
+       this.isFollowing = isFollowing;
+   }
+
+     /**
      * Creates a deterministic key chain with the given watch key and that follows some other keychain. In a married
      * wallet following keychain represents "spouse"
      * Watch key has to be an account key.
@@ -669,14 +679,17 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
      * key rotation it can happen that there are multiple chains found.
      */
     public static List<DeterministicKeyChain> fromProtobuf(List<Protos.Key> keys, @Nullable KeyCrypter crypter) throws UnreadableWalletException {
+        System.out.println("DeterministicKeyChain#fromProtobuf keys = " + keys );
         List<DeterministicKeyChain> chains = newLinkedList();
         DeterministicSeed seed = null;
         DeterministicKeyChain chain = null;
+
         int lookaheadSize = -1;
         for (Protos.Key key : keys) {
             final Protos.Key.Type t = key.getType();
             if (t == Protos.Key.Type.DETERMINISTIC_MNEMONIC) {
                 if (chain != null) {
+                    log.debug("a lookaheadSize = " + lookaheadSize);
                     checkState(lookaheadSize >= 0);
                     chain.setLookaheadSize(lookaheadSize);
                     chain.maybeLookAhead();
@@ -726,11 +739,10 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                 if (chain == null) {
                     if (seed == null) {
                         DeterministicKey accountKey = new DeterministicKey(immutablePath, chainCode, pubkey, null, null);
-                        if (!accountKey.getPath().equals(ACCOUNT_ZERO_PATH))
-                            throw new UnreadableWalletException("Expecting account key but found key with path: " +
-                                    HDUtils.formatPath(accountKey.getPath()));
-                        chain = new DeterministicKeyChain(accountKey, isFollowingKey);
+                        chain = new DeterministicKeyChain(accountKey, isFollowingKey, immutablePath);
                         isWatchingAccountKey = true;
+                        lookaheadSize = chain.getLookaheadSize();
+                        log.debug("B lookaheadSize = " + lookaheadSize);
                     } else {
                         chain = new DeterministicKeyChain(seed, crypter);
                         chain.lookaheadSize = LAZY_CALCULATE_LOOKAHEAD;
@@ -739,6 +751,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                         // everything afterwards.
                     }
                 }
+                log.debug("c");
                 // Find the parent key assuming this is not the root key, and not an account key for a watching chain.
                 DeterministicKey parent = null;
                 if (!path.isEmpty() && !isWatchingAccountKey) {
@@ -771,7 +784,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                 if (!isWatchingAccountKey) {
                     // If the non-encrypted case, the non-leaf keys (account, internal, external) have already been
                     // rederived and inserted at this point and the two lines below are just a no-op. In the encrypted
-                    // case though, we can't rederive and we must reinsert, potentially building the heirarchy object
+                    // case though, we can't rederive and we must reinsert, potentially building the hierarchy object
                     // if need be.
                     if (path.size() == 0) {
                         // Master key.
@@ -793,6 +806,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
             }
         }
         if (chain != null) {
+            log.debug("c lookaheadSize = " + lookaheadSize);
             checkState(lookaheadSize >= 0);
             chain.setLookaheadSize(lookaheadSize);
             chain.maybeLookAhead();
