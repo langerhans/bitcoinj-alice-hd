@@ -23,11 +23,15 @@ Alice tracks the upstream Bitcoinj as closely as possible so the patching proces
 
 `git fetch upstream`
 
-4. Switch to the `master` branch (equivalent of `develop` in Git Flow process)
+4. Switch to the `master` branch (Bitcoinj uses it as the equivalent of `develop` in Git Flow process)
 
 `git checkout master`
 
 5. Rewrite `master` so that any commits of yours that aren't already in `upstream/master` are replayed over the upstream changes:
 
 `git rebase upstream/master`
+
+6. Force push your local changes up to `origin/master`
+
+`git push -f origin master`
 
