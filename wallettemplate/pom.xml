@@ -6,7 +6,7 @@
 
     <groupId>org.bitcoinj</groupId>
     <artifactId>wallettemplate</artifactId>
-    <version>0.13-SNAPSHOT</version>
+    <version>0.13-alice-SNAPSHOT</version>
 
     <build>
         <plugins>
