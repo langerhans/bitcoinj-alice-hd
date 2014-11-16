@@ -884,7 +884,10 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                         if (isMarried)
                             chain = new MarriedKeyChain(accountKey);
                         else
-                            chain = new DeterministicKeyChain(accountKey, isFollowingKey);
+//                          chain = new DeterministicKeyChain(accountKey, isFollowingKey);
+                            // Alice requires the immutable path
+                            chain = new DeterministicKeyChain(accountKey, isFollowingKey, immutablePath);
+
                         isWatchingAccountKey = true;
                         lookaheadSize = chain.getLookaheadSize();
                         log.debug("B lookaheadSize = " + lookaheadSize);
