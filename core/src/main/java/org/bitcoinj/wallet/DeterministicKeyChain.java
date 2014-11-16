@@ -877,9 +877,10 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                     boolean isMarried = !isFollowingKey && !chains.isEmpty() && chains.get(chains.size() - 1).isFollowing();
                     if (seed == null) {
                         DeterministicKey accountKey = new DeterministicKey(immutablePath, chainCode, pubkey, null, null);
-                        if (!accountKey.getPath().equals(ACCOUNT_ZERO_PATH))
-                            throw new UnreadableWalletException("Expecting account key but found key with path: " +
-                                    HDUtils.formatPath(accountKey.getPath()));
+                        // Alice is not restricted in this manner
+//                        if (!accountKey.getPath().equals(ACCOUNT_ZERO_PATH))
+//                            throw new UnreadableWalletException("Expecting account key but found key with path: " +
+//                                    HDUtils.formatPath(accountKey.getPath()));
                         if (isMarried)
                             chain = new MarriedKeyChain(accountKey);
                         else
