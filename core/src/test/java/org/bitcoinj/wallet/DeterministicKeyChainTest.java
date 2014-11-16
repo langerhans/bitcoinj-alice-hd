@@ -17,6 +17,8 @@
 
 package org.bitcoinj.wallet;
 
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Lists;
 import org.bitcoinj.core.*;
 import org.bitcoinj.crypto.ChildNumber;
 import org.bitcoinj.crypto.DeterministicHierarchy;
@@ -32,7 +34,6 @@ import org.spongycastle.crypto.params.KeyParameter;
 
 import java.io.IOException;
 import java.security.SecureRandom;
-import java.util.Date;
 import java.util.List;
 
 import static com.google.common.base.Preconditions.checkNotNull;

@@ -15,19 +15,6 @@
  * limitations under the License.
  */
 
-<<<<<<< HEAD:core/src/main/java/com/google/bitcoin/wallet/KeyChainGroup.java
-package com.google.bitcoin.wallet;
-
-import com.google.bitcoin.core.*;
-import com.google.bitcoin.crypto.ChildNumber;
-import com.google.bitcoin.crypto.DeterministicKey;
-import com.google.bitcoin.crypto.KeyCrypter;
-import com.google.bitcoin.script.Script;
-import com.google.bitcoin.script.ScriptBuilder;
-import com.google.bitcoin.store.UnreadableWalletException;
-import com.google.bitcoin.utils.ListenerRegistration;
-import com.google.bitcoin.utils.Threading;
-=======
 package org.bitcoinj.wallet;
 
 import org.bitcoinj.core.*;
@@ -40,7 +27,6 @@ import org.bitcoinj.store.UnreadableWalletException;
 import org.bitcoinj.utils.ListenerRegistration;
 import org.bitcoinj.utils.Threading;
 
->>>>>>> 8e0f7a2645ca7946e258f524af0ef080f5183127:core/src/main/java/org/bitcoinj/wallet/KeyChainGroup.java
 import com.google.common.base.Joiner;
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableList;
@@ -109,37 +95,26 @@ public class KeyChainGroup implements KeyBag {
         this(params, null, ImmutableList.of(DeterministicKeyChain.watch(watchKey)), null, null);
     }
 
-<<<<<<< HEAD:core/src/main/java/com/google/bitcoin/wallet/KeyChainGroup.java
+
   /**
      * Creates a keychain group with no basic chain, and an HD chain that is watching the given watching key which
      * was assumed to be first used at the given UNIX time.
      * This HAS to be an account key as returned by {@link DeterministicKeyChain#getWatchingKey()}.
-=======
-    /**
+     *
      * Alice
      * TODO Fill in comments
      * @param params
      * @param watchKey
      * @param creationTimeSecondsSecs
->>>>>>> 8e0f7a2645ca7946e258f524af0ef080f5183127:core/src/main/java/org/bitcoinj/wallet/KeyChainGroup.java
      */
     public KeyChainGroup(NetworkParameters params, DeterministicKey watchKey, long creationTimeSecondsSecs) {
         this(params, null, ImmutableList.of(DeterministicKeyChain.watch(watchKey, creationTimeSecondsSecs)), null, null, 1, null);
     }
 
-<<<<<<< HEAD:core/src/main/java/com/google/bitcoin/wallet/KeyChainGroup.java
-   /**
-     * Creates a keychain group with no basic chain, and an HD chain that is watching the given watching key which
-     * was assumed to be first used at the given UNIX time.
-     */
-    public KeyChainGroup(NetworkParameters params, DeterministicKey watchKey, long creationTimeSecondsSecs, ImmutableList<ChildNumber> rootNodeList) {
-        this(params, null, ImmutableList.of(DeterministicKeyChain.watch(watchKey, creationTimeSecondsSecs, rootNodeList)), null, null, 1, null);
-    }
-
-      /**
+    /**
      * Creates a keychain group with no basic chain, with an HD chain initialized from the given seed and being followed
      * by given list of watch keys. Watch keys have to be account keys.
-=======
+
     /**
      * Alice
      * TODO Fill in comments
@@ -147,7 +122,6 @@ public class KeyChainGroup implements KeyBag {
      * @param watchKey
      * @param creationTimeSecondsSecs
      * @param rootNodeList
->>>>>>> 8e0f7a2645ca7946e258f524af0ef080f5183127:core/src/main/java/org/bitcoinj/wallet/KeyChainGroup.java
      */
     public KeyChainGroup(NetworkParameters params, DeterministicKey watchKey, long creationTimeSecondsSecs, ImmutableList<ChildNumber> rootNodeList) {
         this(params, null, ImmutableList.of(DeterministicKeyChain.watch(watchKey, creationTimeSecondsSecs, rootNodeList)), null, null, 1, null);

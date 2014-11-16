@@ -254,11 +254,6 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
     private final ImmutableList<ChildNumber> rootNodeList;
 
     /**
-     * The root node of the DeterministicKeyChain
-     */
-    private final ImmutableList<ChildNumber> rootNodeList;
-
-    /**
      * Generates a new key chain with entropy selected randomly from the given {@link java.security.SecureRandom}
      * object and the default entropy size.
      */
@@ -334,8 +329,6 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         this.seed = null;
         this.rootNodeList = rootNodeList;
         initializeHierarchyUnencrypted(watchingKey, rootNodeList);
-<<<<<<< HEAD:core/src/main/java/com/google/bitcoin/wallet/DeterministicKeyChain.java
-=======
     }
 
     /**
@@ -343,21 +336,6 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
      * balances and generally follow along, but spending is not possible with such a chain. Currently you can't use
      * this method to watch an arbitrary fragment of some other tree, this limitation may be removed in future.
      */
-    public DeterministicKeyChain(DeterministicKey watchingKey, long creationTimeSeconds) {
-        this(watchingKey, creationTimeSeconds, ACCOUNT_ZERO_PATH);
-    }
-
-    public DeterministicKeyChain(DeterministicKey watchingKey) {
-        this(watchingKey, Utils.currentTimeSeconds());
->>>>>>> 8e0f7a2645ca7946e258f524af0ef080f5183127:core/src/main/java/org/bitcoinj/wallet/DeterministicKeyChain.java
-    }
-
-    /**
-     * Creates a deterministic key chain that watches the given (public only) root key. You can use this to calculate
-     * balances and generally follow along, but spending is not possible with such a chain. Currently you can't use
-     * this method to watch an arbitrary fragment of some other tree, this limitation may be removed in future.
-     */
-<<<<<<< HEAD:core/src/main/java/com/google/bitcoin/wallet/DeterministicKeyChain.java
     public DeterministicKeyChain(DeterministicKey watchingKey, long creationTimeSeconds) {
         this(watchingKey, creationTimeSeconds, ACCOUNT_ZERO_PATH);
     }
@@ -371,18 +349,12 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
     * some other keychain. In a married wallet following keychain represents "spouse's" keychain.</p>
     * <p>Watch key has to be an account key.</p>
     */
-   private DeterministicKeyChain(DeterministicKey watchKey, boolean isFollowing) {
-       this(watchKey, Utils.currentTimeSeconds());
-       this.isFollowing = isFollowing;
-   }
 
-=======
     protected DeterministicKeyChain(DeterministicKey watchKey, boolean isFollowing) {
         this(watchKey, Utils.currentTimeSeconds());
         this.isFollowing = isFollowing;
     }
 
->>>>>>> 8e0f7a2645ca7946e258f524af0ef080f5183127:core/src/main/java/org/bitcoinj/wallet/DeterministicKeyChain.java
   /**
     * <p>Creates a deterministic key chain with the given watch key. If <code>isFollowing</code> flag is set then this keychain follows
     * some other keychain. In a married wallet following keychain represents "spouse's" keychain.</p>
@@ -906,17 +878,12 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                     boolean isMarried = !isFollowingKey && !chains.isEmpty() && chains.get(chains.size() - 1).isFollowing();
                     if (seed == null) {
                         DeterministicKey accountKey = new DeterministicKey(immutablePath, chainCode, pubkey, null, null);
-<<<<<<< HEAD:core/src/main/java/com/google/bitcoin/wallet/DeterministicKeyChain.java
-                        chain = new DeterministicKeyChain(accountKey, isFollowingKey, immutablePath);
-=======
-                        if (!accountKey.getPath().equals(ACCOUNT_ZERO_PATH))
-                            throw new UnreadableWalletException("Expecting account key but found key with path: " +
-                                    HDUtils.formatPath(accountKey.getPath()));
+
                         if (isMarried)
                             chain = new MarriedKeyChain(accountKey);
                         else
-                            chain = new DeterministicKeyChain(accountKey, isFollowingKey);
->>>>>>> 8e0f7a2645ca7946e258f524af0ef080f5183127:core/src/main/java/org/bitcoinj/wallet/DeterministicKeyChain.java
+                            chain = new DeterministicKeyChain(accountKey, isFollowingKey, immutablePath);
+
                         isWatchingAccountKey = true;
                         lookaheadSize = chain.getLookaheadSize();
                         log.debug("B lookaheadSize = " + lookaheadSize);
