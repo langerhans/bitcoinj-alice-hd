@@ -879,9 +879,15 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                     if (seed == null) {
                         DeterministicKey accountKey = new DeterministicKey(immutablePath, chainCode, pubkey, null, null);
 
+                        // Alice is not restricted in this manner
+//                        if (!accountKey.getPath().equals(ACCOUNT_ZERO_PATH))
+//                            throw new UnreadableWalletException("Expecting account key but found key with path: " +
+//                                    HDUtils.formatPath(accountKey.getPath()));
                         if (isMarried)
                             chain = new MarriedKeyChain(accountKey);
                         else
+//                          chain = new DeterministicKeyChain(accountKey, isFollowingKey);
+                            // Alice requires the immutable path
                             chain = new DeterministicKeyChain(accountKey, isFollowingKey, immutablePath);
 
                         isWatchingAccountKey = true;
