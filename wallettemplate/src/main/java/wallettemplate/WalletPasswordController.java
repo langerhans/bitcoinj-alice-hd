@@ -1,6 +1,7 @@
 package wallettemplate;
 
-import com.google.bitcoin.crypto.KeyCrypterScrypt;
+import javafx.application.Platform;
+import org.bitcoinj.crypto.KeyCrypterScrypt;
 import com.google.common.primitives.Longs;
 import com.google.protobuf.ByteString;
 import javafx.beans.property.ReadOnlyObjectProperty;
@@ -43,6 +44,7 @@ public class WalletPasswordController {
 
     public void initialize() {
         progressMeter.setOpacity(0);
+        Platform.runLater(pass1::requestFocus);
     }
 
     @FXML void confirmClicked(ActionEvent event) {

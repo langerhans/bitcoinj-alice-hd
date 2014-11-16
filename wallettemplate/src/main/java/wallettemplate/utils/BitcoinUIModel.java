@@ -1,6 +1,6 @@
 package wallettemplate.utils;
 
-import com.google.bitcoin.core.*;
+import org.bitcoinj.core.*;
 import javafx.application.Platform;
 import javafx.beans.property.ReadOnlyDoubleProperty;
 import javafx.beans.property.ReadOnlyObjectProperty;
@@ -43,8 +43,8 @@ public class BitcoinUIModel {
 
     private class ProgressBarUpdater extends DownloadListener {
         @Override
-        protected void progress(double pct, int blocksSoFar, Date date) {
-            super.progress(pct, blocksSoFar, date);
+        protected void progress(double pct, int blocksLeft, Date date) {
+            super.progress(pct, blocksLeft, date);
             Platform.runLater(() -> syncProgress.set(pct / 100.0));
         }
 
