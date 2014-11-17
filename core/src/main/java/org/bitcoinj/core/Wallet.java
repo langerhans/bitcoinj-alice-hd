@@ -2317,18 +2317,19 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
     private void addWalletTransaction(Pool pool, Transaction tx) {
         checkState(lock.isHeldByCurrentThread());
         transactions.put(tx.getHash(), tx);
+        // ALICE - remove check tx is already in pool - does not work with replay
         switch (pool) {
         case UNSPENT:
-            checkState(unspent.put(tx.getHash(), tx) == null);
+            unspent.put(tx.getHash(), tx);
             break;
         case SPENT:
-            checkState(spent.put(tx.getHash(), tx) == null);
+            spent.put(tx.getHash(), tx);
             break;
         case PENDING:
-            checkState(pending.put(tx.getHash(), tx) == null);
+            pending.put(tx.getHash(), tx);
             break;
         case DEAD:
-            checkState(dead.put(tx.getHash(), tx) == null);
+            dead.put(tx.getHash(), tx);
             break;
         default:
             throw new RuntimeException("Unknown wallet transaction type " + pool);
