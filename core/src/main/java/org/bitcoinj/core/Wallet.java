@@ -58,7 +58,6 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import static com.google.common.base.Preconditions.*;
 
@@ -1797,7 +1796,8 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
 
         informConfidenceListenersIfNotReorganizing();
         checkState(isConsistent());
-        saveNow();
+        // ALICE - saveLater rather than saveNow so as to improve replay / sync
+        saveLater();
     }
 
     private void informConfidenceListenersIfNotReorganizing() {
@@ -2113,7 +2113,8 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
 
             checkState(isConsistent());
             informConfidenceListenersIfNotReorganizing();
-            saveNow();
+            // ALICE - defer wallet write - improves replay performance
+            saveLater();
         } finally {
             lock.unlock();
         }
