@@ -87,6 +87,11 @@ public class KeyChainGroup implements KeyBag {
         this(params, null, ImmutableList.of(new DeterministicKeyChain(seed)), null, null);
     }
 
+    /** Creates a keychain group with no basic chain, and an HD chain initialized from the given seed and rootNodeList*/
+    public KeyChainGroup(NetworkParameters params, DeterministicSeed seed, ImmutableList<ChildNumber> rootNodeList) {
+      this(params, null, ImmutableList.of(new DeterministicKeyChain(seed, rootNodeList)), null, null, 1, null);
+    }
+
     /**
      * Creates a keychain group with no basic chain, and an HD chain that is watching the given watching key.
      * This HAS to be an account key as returned by {@link DeterministicKeyChain#getWatchingKey()}.
@@ -101,11 +106,10 @@ public class KeyChainGroup implements KeyBag {
      * was assumed to be first used at the given UNIX time.
      * This HAS to be an account key as returned by {@link DeterministicKeyChain#getWatchingKey()}.
      *
-     * Alice
-     * TODO Fill in comments
-     * @param params
-     * @param watchKey
-     * @param creationTimeSecondsSecs
+     * ALICE
+     * @param params Network parameters
+     * @param watchKey The key to watch
+     * @param creationTimeSecondsSecs Creation time of the wallet in seconds
      */
     public KeyChainGroup(NetworkParameters params, DeterministicKey watchKey, long creationTimeSecondsSecs) {
         this(params, null, ImmutableList.of(DeterministicKeyChain.watch(watchKey, creationTimeSecondsSecs)), null, null, 1, null);
@@ -116,19 +120,18 @@ public class KeyChainGroup implements KeyBag {
      * by given list of watch keys. Watch keys have to be account keys.
 
     /**
-     * Alice
-     * TODO Fill in comments
-     * @param params
-     * @param watchKey
-     * @param creationTimeSecondsSecs
-     * @param rootNodeList
+     * ALICE
+     * @param params Network parameters
+     * @param watchKey The key to watch
+     * @param creationTimeSecondsSecs Creation time of the wallet in seconds
+     * @param rootNodeList The root node to use for the wallet (e.g. account 44 for Trezor wallets)
      */
     public KeyChainGroup(NetworkParameters params, DeterministicKey watchKey, long creationTimeSecondsSecs, ImmutableList<ChildNumber> rootNodeList) {
         this(params, null, ImmutableList.of(DeterministicKeyChain.watch(watchKey, creationTimeSecondsSecs, rootNodeList)), null, null, 1, null);
     }
 
     /**
-     * Alice
+     * ALICE
      * TODO Fill in comments
      *
      * @param params

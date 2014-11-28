@@ -879,7 +879,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                     if (seed == null) {
                         DeterministicKey accountKey = new DeterministicKey(immutablePath, chainCode, pubkey, null, null);
 
-                        // Alice is not restricted in this manner
+                        // ALICE is not restricted in this manner
 //                        if (!accountKey.getPath().equals(ACCOUNT_ZERO_PATH))
 //                            throw new UnreadableWalletException("Expecting account key but found key with path: " +
 //                                    HDUtils.formatPath(accountKey.getPath()));
@@ -887,7 +887,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                             chain = new MarriedKeyChain(accountKey);
                         else
 //                          chain = new DeterministicKeyChain(accountKey, isFollowingKey);
-                            // Alice requires the immutable path
+                            // ALICE requires the immutable path
                             chain = new DeterministicKeyChain(accountKey, isFollowingKey, immutablePath);
 
                         isWatchingAccountKey = true;
@@ -909,8 +909,13 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                 DeterministicKey parent = null;
                 if (!path.isEmpty() && !isWatchingAccountKey) {
                     ChildNumber index = path.removeLast();
-                    parent = chain.hierarchy.get(path, false, false);
-                    path.add(index);
+                    // ALICE - allow no parent for Trezor soft wallets
+                    try {
+                      parent = chain.hierarchy.get(path, false, false);
+                      path.add(index);
+                    } catch (IllegalArgumentException iae) {
+                      log.debug("Ignoring an IllegalArgumentException when trying to get the parent of key with path {}", path);
+                    }
                 }
                 DeterministicKey detkey;
                 if (key.hasSecretBytes()) {

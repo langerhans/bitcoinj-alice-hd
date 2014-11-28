@@ -216,9 +216,18 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
         this(params, new KeyChainGroup(params));
     }
 
-    public static Wallet fromSeed(NetworkParameters params, DeterministicSeed seed) {
-        return new Wallet(params, new KeyChainGroup(params, seed));
-    }
+  public static Wallet fromSeed(NetworkParameters params, DeterministicSeed seed) {
+         return new Wallet(params, new KeyChainGroup(params, seed));
+     }
+
+  /**
+   * ALICE
+   * Create a wallet using the provided rootNodeList as the top node in the HD chain
+   * @param rootNodeList the path corresponding to the root account node to use
+   */
+  public static Wallet fromSeed(NetworkParameters params, DeterministicSeed seed, ImmutableList<ChildNumber> rootNodeList) {
+         return new Wallet(params, new KeyChainGroup(params, seed, rootNodeList));
+  }
 
   /**
     * Creates a wallet that tracks payments to and from the HD key hierarchy rooted by the given watching key. A
