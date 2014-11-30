@@ -87,9 +87,16 @@ public class KeyChainGroup implements KeyBag {
         this(params, null, ImmutableList.of(new DeterministicKeyChain(seed)), null, null);
     }
 
-    /** Creates a keychain group with no basic chain, and an HD chain initialized from the given seed and rootNodeList*/
-    public KeyChainGroup(NetworkParameters params, DeterministicSeed seed, ImmutableList<ChildNumber> rootNodeList) {
+    /**
+     * ALICE
+     * Creates a keychain group with no basic chain, and an HD chain initialized from the given seed and rootNodeList
+     * The KeyChainGroup is encrypted sing the crypter and password
+     *
+     * */
+    public KeyChainGroup(NetworkParameters params, DeterministicSeed seed, ImmutableList<ChildNumber> rootNodeList, CharSequence password, KeyCrypter crypter) {
       this(params, null, ImmutableList.of(new DeterministicKeyChain(seed, rootNodeList)), null, null, 1, null);
+      KeyParameter aesKey = crypter.deriveKey(password);
+      this.encrypt(crypter, aesKey, rootNodeList);
     }
 
     /**
@@ -176,11 +183,22 @@ public class KeyChainGroup implements KeyBag {
         }
     }
 
-    /** Adds a new HD chain to the chains list, and make it the default chain (from which keys are issued). */
-    public void createAndActivateNewHDChain() {
+  /**
+   * ALICE
+   * Adds a new HD chain to the chains list, and make it the default chain (from which keys are issued).
+   * */
+    public void createAndActivateNewHDChain(ImmutableList<ChildNumber> rootPathNode) {
         // We can't do auto upgrade here because we don't know the rotation time, if any.
-        final DeterministicKeyChain chain = new DeterministicKeyChain(new SecureRandom());
+        final DeterministicKeyChain chain = new DeterministicKeyChain(new SecureRandom(), rootPathNode);
         addAndActivateHDChain(chain);
+    }
+
+  /**
+   * ALICE
+   * Adds a new HD chain to the chains list, and make it the default chain (from which keys are issued).
+   */
+    public void createAndActivateNewHDChain() {
+      createAndActivateNewHDChain(DeterministicKeyChain.ACCOUNT_ZERO_PATH);
     }
 
     /**
@@ -535,7 +553,20 @@ public class KeyChainGroup implements KeyBag {
         return !chains.isEmpty() && getActiveKeyChain().isMarried();
     }
 
+  /**
+   * Encrypt the keys in the group using the KeyCrypter and the AES key. A good default KeyCrypter to use is
+   * {@link org.bitcoinj.crypto.KeyCrypterScrypt}.
+   *
+   * @throws org.bitcoinj.crypto.KeyCrypterException Thrown if the wallet encryption fails for some reason,
+   *         leaving the group unchanged.
+   * @throws DeterministicUpgradeRequiredException Thrown if there are random keys but no HD chain.
+   */
+  public void encrypt(KeyCrypter keyCrypter, KeyParameter aesKey) {
+    encrypt(keyCrypter, aesKey, DeterministicKeyChain.ACCOUNT_ZERO_PATH);
+  }
     /**
+     *
+     * ALICE
      * Encrypt the keys in the group using the KeyCrypter and the AES key. A good default KeyCrypter to use is
      * {@link org.bitcoinj.crypto.KeyCrypterScrypt}.
      *
@@ -543,7 +574,7 @@ public class KeyChainGroup implements KeyBag {
      *         leaving the group unchanged.
      * @throws DeterministicUpgradeRequiredException Thrown if there are random keys but no HD chain.
      */
-    public void encrypt(KeyCrypter keyCrypter, KeyParameter aesKey) {
+    public void encrypt(KeyCrypter keyCrypter, KeyParameter aesKey, @Nullable ImmutableList<ChildNumber> rootNodeList) {
         checkNotNull(keyCrypter);
         checkNotNull(aesKey);
         // This code must be exception safe.
@@ -552,10 +583,10 @@ public class KeyChainGroup implements KeyBag {
         if (chains.isEmpty() && basic.numKeys() == 0) {
             // No HD chains and no random keys: encrypting an entirely empty keychain group. But we can't do that, we
             // must have something to encrypt: so instantiate a new HD chain here.
-            createAndActivateNewHDChain();
+            createAndActivateNewHDChain(rootNodeList);
         }
         for (DeterministicKeyChain chain : chains)
-            newChains.add(chain.toEncrypted(keyCrypter, aesKey));
+            newChains.add(chain.toEncrypted(keyCrypter, aesKey, rootNodeList));
         this.keyCrypter = keyCrypter;
         basic = newBasic;
         chains.clear();

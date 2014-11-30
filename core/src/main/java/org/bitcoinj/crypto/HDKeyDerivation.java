@@ -75,6 +75,25 @@ public final class HDKeyDerivation {
         return masterPrivKey;
     }
 
+  // ALICE
+  public static DeterministicKey createMasterPrivateKey(ImmutableList<ChildNumber> rootNodeList, byte[] seed) throws HDDerivationException {
+       checkArgument(seed.length > 8, "Seed is too short and could be brute forced");
+       // Calculate I = HMAC-SHA512(key="Bitcoin seed", msg=S)
+       byte[] i = HDUtils.hmacSha512(MASTER_HMAC_SHA512, seed);
+       // Split I into two 32-byte sequences, Il and Ir.
+       // Use Il as master secret key, and Ir as master chain code.
+       checkState(i.length == 64, i.length);
+       byte[] il = Arrays.copyOfRange(i, 0, 32);
+       byte[] ir = Arrays.copyOfRange(i, 32, 64);
+       Arrays.fill(i, (byte)0);
+       DeterministicKey masterPrivKey = createMasterPrivKeyFromBytes(rootNodeList, il, ir);
+       Arrays.fill(il, (byte)0);
+       Arrays.fill(ir, (byte)0);
+       // Child deterministic keys will chain up to their parents to find the keys.
+       masterPrivKey.setCreationTimeSeconds(Utils.currentTimeSeconds());
+       return masterPrivKey;
+   }
+
     /**
      * @throws HDDerivationException if privKeyBytes is invalid (0 or >= n).
      */
@@ -84,6 +103,14 @@ public final class HDKeyDerivation {
         assertLessThanN(priv, "Generated master key is invalid.");
         return new DeterministicKey(ImmutableList.<ChildNumber>of(), chainCode, priv, null);
     }
+
+    // ALICE
+    public static DeterministicKey createMasterPrivKeyFromBytes(ImmutableList<ChildNumber> rootNodeList, byte[] privKeyBytes, byte[] chainCode) throws HDDerivationException {
+       BigInteger priv = new BigInteger(1, privKeyBytes);
+       assertNonZero(priv, "Generated master key is invalid.");
+       assertLessThanN(priv, "Generated master key is invalid.");
+       return new DeterministicKey(rootNodeList, chainCode, priv, null);
+   }
 
     public static DeterministicKey createMasterPubKeyFromBytes(byte[] pubKeyBytes, byte[] chainCode) {
         return new DeterministicKey(ImmutableList.<ChildNumber>of(), chainCode, ECKey.CURVE.getCurve().decodePoint(pubKeyBytes), null, null);

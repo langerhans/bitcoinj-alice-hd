@@ -414,6 +414,20 @@ public class BasicKeyChain implements EncryptableKeyChain {
         return toEncrypted(scrypt, derivedKey);
     }
 
+  /**
+   * Encrypt the wallet using the KeyCrypter and the AES key. A good default KeyCrypter to use is
+   * {@link org.bitcoinj.crypto.KeyCrypterScrypt}.
+   *
+   * @param keyCrypter The KeyCrypter that specifies how to encrypt/ decrypt a key
+   * @param aesKey AES key to use (normally created using KeyCrypter#deriveKey and cached as it is time consuming
+   *               to create from a password)
+   * @throws KeyCrypterException Thrown if the wallet encryption fails. If so, the wallet state is unchanged.
+   */
+  @Override
+  public BasicKeyChain toEncrypted(KeyCrypter keyCrypter, KeyParameter aesKey, ImmutableList<ChildNumber> rootPathNode) {
+    return toEncrypted(keyCrypter, aesKey);
+  }
+
     /**
      * Encrypt the wallet using the KeyCrypter and the AES key. A good default KeyCrypter to use is
      * {@link org.bitcoinj.crypto.KeyCrypterScrypt}.

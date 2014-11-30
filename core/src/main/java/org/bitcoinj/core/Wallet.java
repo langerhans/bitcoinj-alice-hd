@@ -224,9 +224,10 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
    * ALICE
    * Create a wallet using the provided rootNodeList as the top node in the HD chain
    * @param rootNodeList the path corresponding to the root account node to use
+   * @param crypter the KeyCrypter to use to encrypt the wallet keys
    */
-  public static Wallet fromSeed(NetworkParameters params, DeterministicSeed seed, ImmutableList<ChildNumber> rootNodeList) {
-         return new Wallet(params, new KeyChainGroup(params, seed, rootNodeList));
+  public static Wallet fromSeed(NetworkParameters params, DeterministicSeed seed, ImmutableList<ChildNumber> rootNodeList, CharSequence password, KeyCrypter crypter) {
+         return new Wallet(params, new KeyChainGroup(params, seed, rootNodeList, password, crypter));
   }
 
   /**

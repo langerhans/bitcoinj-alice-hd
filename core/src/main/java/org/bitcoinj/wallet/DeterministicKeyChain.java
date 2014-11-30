@@ -253,12 +253,21 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
      */
     private final ImmutableList<ChildNumber> rootNodeList;
 
-    /**
+  /**
      * Generates a new key chain with entropy selected randomly from the given {@link java.security.SecureRandom}
      * object and the default entropy size.
      */
     public DeterministicKeyChain(SecureRandom random) {
         this(random, DeterministicSeed.DEFAULT_SEED_ENTROPY_BITS, DEFAULT_PASSPHRASE_FOR_MNEMONIC, Utils.currentTimeSeconds());
+    }
+  /**
+   *
+   * ALICE
+     * Generates a new key chain with entropy selected randomly from the given {@link java.security.SecureRandom}
+     * object and the default entropy size.
+     */
+    public DeterministicKeyChain(SecureRandom random, ImmutableList<ChildNumber> rootNodeList) {
+        this(random, DeterministicSeed.DEFAULT_SEED_ENTROPY_BITS, DEFAULT_PASSPHRASE_FOR_MNEMONIC, Utils.currentTimeSeconds(), rootNodeList);
     }
 
     /**
@@ -269,16 +278,25 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         this(random, bits, DEFAULT_PASSPHRASE_FOR_MNEMONIC, Utils.currentTimeSeconds());
     }
 
-    /**
-     * Generates a new key chain with entropy selected randomly from the given {@link java.security.SecureRandom}
-     * object and of the requested size in bits.  The derived seed is further protected with a user selected passphrase
-     * (see BIP 39).
-     */
-    public DeterministicKeyChain(SecureRandom random, int bits, String passphrase, long seedCreationTimeSecs) {
-        this(new DeterministicSeed(random, bits, passphrase, seedCreationTimeSecs));
-    }
+  /**
+    * Generates a new key chain with entropy selected randomly from the given {@link java.security.SecureRandom}
+    * object and of the requested size in bits.  The derived seed is further protected with a user selected passphrase
+    * (see BIP 39).
+    */
+   public DeterministicKeyChain(SecureRandom random, int bits, String passphrase, long seedCreationTimeSecs) {
+       this(new DeterministicSeed(random, bits, passphrase, seedCreationTimeSecs));
+   }
 
-    /**
+  /**
+    * Generates a new key chain with entropy selected randomly from the given {@link java.security.SecureRandom}
+    * object and of the requested size in bits.  The derived seed is further protected with a user selected passphrase
+    * (see BIP 39).
+    */
+   public DeterministicKeyChain(SecureRandom random, int bits, String passphrase, long seedCreationTimeSecs, ImmutableList<ChildNumber> rootPathNode) {
+       this(new DeterministicSeed(random, bits, passphrase, seedCreationTimeSecs), rootPathNode);
+   }
+
+     /**
      * Creates a deterministic key chain starting from the given entropy. All keys yielded by this chain will be the same
      * if the starting seed is the same. You should provide the creation time in seconds since the UNIX epoch for the
      * seed: this lets us know from what part of the chain we can expect to see derived keys appear.
@@ -287,7 +305,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         this(new DeterministicSeed(entropy, passphrase, seedCreationTimeSecs));
     }
 
-    /**
+  /**
      * Creates a deterministic key chain starting from the given seed. All keys yielded by this chain will be the same
      * if the starting seed is the same.
      */
@@ -296,23 +314,34 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
     }
 
   /**
+     * Creates a deterministic key chain starting from the given seed and rootNodeList. All keys yielded by this chain will be the same
+     * if the starting seed and rootNodeList is the same.
+     */
+    protected DeterministicKeyChain(DeterministicSeed seed, ImmutableList<ChildNumber> rootNodeList) {
+        this(seed, rootNodeList, (KeyCrypter)null);
+    }
+
+   /**
+     * ALICE
      * Creates a deterministic key chain starting from the given seed for a given account.
      * Standard HD wallets start at the node from M/0/0'
      * This constructor allows you to start creating keys from, say, m/44'/0'/0' (BIP 44)
      * All keys yielded by this chain will be the same if the starting seed is the same.
      * @param seed The seed to use for creation of the DeterministicKeyChain
      * @param rootNodeList The BIP32 node which will be used as the root for key generation
-   *
+     *
      */
-    protected DeterministicKeyChain(DeterministicSeed seed, ImmutableList<ChildNumber> rootNodeList) {
+    protected DeterministicKeyChain(DeterministicSeed seed, ImmutableList<ChildNumber> rootNodeList, @Nullable KeyCrypter crypter) {
       this.seed = seed;
       this.rootNodeList = rootNodeList;
-      basicKeyChain = new BasicKeyChain(null); // TODO keyCrypter = null ???
+      basicKeyChain = new BasicKeyChain(crypter);
       if (!seed.isEncrypted()) {
-          rootKey = HDKeyDerivation.createMasterPrivateKey(checkNotNull(seed.getSeedBytes()));
+          rootKey = HDKeyDerivation.createMasterPrivateKey(rootNodeList, checkNotNull(seed.getSeedBytes()));
           rootKey.setCreationTimeSeconds(seed.getCreationTimeSeconds());
+
           initializeHierarchyUnencrypted(rootKey, rootNodeList);
       }
+      System.out.println("DeterministicKeyChain seed:" + seed + ", rootNodeList: " + rootNodeList + ", rootKey: " + rootKey);
     }
 
   /**
@@ -413,8 +442,13 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         // rest of the setup (loading the root key).
     }
 
-    // For use in encryption.
+     // For use in encryption.
     private DeterministicKeyChain(KeyCrypter crypter, KeyParameter aesKey, DeterministicKeyChain chain) {
+        this(crypter, aesKey, chain, ACCOUNT_ZERO_PATH);
+    }
+
+    // For use in encryption.
+    private DeterministicKeyChain(KeyCrypter crypter, KeyParameter aesKey, DeterministicKeyChain chain, ImmutableList<ChildNumber> rootNodeList) {
         // Can't encrypt a watching chain.
         checkNotNull(chain.rootKey);
         checkNotNull(chain.seed);
@@ -428,16 +462,20 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         this.lookaheadThreshold = chain.lookaheadThreshold;
 
         this.seed = chain.seed.encrypt(crypter, aesKey);
-        this.rootNodeList = ACCOUNT_ZERO_PATH;
+        this.rootNodeList = rootNodeList;
         basicKeyChain = new BasicKeyChain(crypter);
         // The first number is the "account number" but we don't use that feature.
+        System.out.println("DeterministicKeyChain unencrypted rootKey: " + chain.rootKey);
         rootKey = chain.rootKey.encrypt(crypter, aesKey, null);
         hierarchy = new DeterministicHierarchy(rootKey);
         basicKeyChain.importKey(rootKey);
 
-        DeterministicKey account = encryptNonLeaf(aesKey, chain, rootKey, ACCOUNT_ZERO_PATH);
+        DeterministicKey account = encryptNonLeaf(aesKey, chain, rootKey, rootNodeList);
+        System.out.println("DeterministicKeyChain account: " + account);
         externalKey = encryptNonLeaf(aesKey, chain, account, EXTERNAL_PATH);
+        System.out.println("DeterministicKeyChain externalKey:" + externalKey);
         internalKey = encryptNonLeaf(aesKey, chain, account, INTERNAL_PATH);
+        System.out.println("DeterministicKeyChain internalKey:" + internalKey);
 
         // Now copy the (pubkey only) leaf keys across to avoid rederiving them. The private key bytes are missing
         // anyway so there's nothing to encrypt.
@@ -454,8 +492,11 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
 
     private DeterministicKey encryptNonLeaf(KeyParameter aesKey, DeterministicKeyChain chain,
                                             DeterministicKey parent, ImmutableList<ChildNumber> path) {
+        System.out.println("DeterministicKeyChain hierarchy: " + hierarchy);
         DeterministicKey key = chain.hierarchy.get(path, false, false);
+        System.out.println("DeterministicKeyChain unencrypted key: " + key);
         key = key.encrypt(checkNotNull(basicKeyChain.getKeyCrypter()), aesKey, parent);
+        System.out.println("DeterministicKeyChain encrypted key: " + key);
         hierarchy.putKey(key);
         basicKeyChain.importKey(key);
         return key;
@@ -992,10 +1033,16 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         return toEncrypted(scrypt, derivedKey);
     }
 
-    @Override
-    public DeterministicKeyChain toEncrypted(KeyCrypter keyCrypter, KeyParameter aesKey) {
-        return new DeterministicKeyChain(keyCrypter, aesKey, this);
-    }
+  @Override
+  public DeterministicKeyChain toEncrypted(KeyCrypter keyCrypter, KeyParameter aesKey) {
+      return new DeterministicKeyChain(keyCrypter, aesKey, this);
+  }
+
+  @Override
+  // ALICE
+  public DeterministicKeyChain toEncrypted(KeyCrypter keyCrypter, KeyParameter aesKey, ImmutableList<ChildNumber> rootNodeList) {
+      return new DeterministicKeyChain(keyCrypter, aesKey, this, rootNodeList);
+  }
 
     @Override
     public DeterministicKeyChain toDecrypted(CharSequence password) {
