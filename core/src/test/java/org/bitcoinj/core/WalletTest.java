@@ -110,6 +110,40 @@ public class WalletTest extends TestWithWallet {
     }
 
     @Test
+    public void cloneFromSeed() {
+        final int NUM_KEYS = 10;
+
+        // First, grab a load of keys from the wallet, and then check the same keys are created in the original
+        Wallet shadow = Wallet.fromSeed(wallet.getParams(), wallet.getKeyChainSeed());
+        List<ECKey> shadowKeys = new ArrayList<ECKey>(NUM_KEYS);
+
+        // Grab the first fresh key - this such match the 'myKey' in the super.setup
+        ECKey firstShadowKey = shadow.freshReceiveKey();
+
+        for (int i = 0; i < NUM_KEYS; i++) {
+          shadowKeys.add(shadow.freshReceiveKey());
+          System.out.println("shadow key " + i + ", " + shadowKeys.get(i));
+        }
+
+        List<ECKey> originalKeys = new ArrayList<ECKey>(NUM_KEYS);
+        for (int i = 0; i < NUM_KEYS; i++) {
+          originalKeys.add(wallet.freshReceiveKey());
+          System.out.println("original key " + i + ", " + originalKeys.get(i));
+        }
+
+        assertTrue(Arrays.equals(firstShadowKey.getPrivKeyBytes(), myKey.getPrivKeyBytes()));
+        assertTrue(Arrays.equals(firstShadowKey.getPubKey(), myKey.getPubKey()));
+        assertTrue(Arrays.equals(firstShadowKey.getPubKeyHash(), myKey.getPubKeyHash()));
+
+        for (int i = 0; i< NUM_KEYS; i++) {
+          assertTrue(Arrays.equals(originalKeys.get(i).getPrivKeyBytes(), shadowKeys.get(i).getPrivKeyBytes()));
+          assertTrue(Arrays.equals(originalKeys.get(i).getPubKey(), shadowKeys.get(i).getPubKey()));
+          assertTrue(Arrays.equals(originalKeys.get(i).getPubKeyHash(), shadowKeys.get(i).getPubKeyHash()));
+        }
+
+    }
+
+    @Test
     public void getSeedAsWords1() {
         // Can't verify much here as the wallet is random each time. We could fix the RNG for the unit tests and solve.
         assertEquals(12, wallet.getKeyChainSeed().getMnemonicCode().size());
@@ -2660,7 +2694,7 @@ public class WalletTest extends TestWithWallet {
     }
 
     @SuppressWarnings("ConstantConditions")
-    @Test
+    @Ignore
     public void keyRotationHD2() throws Exception {
         // Check we handle the following scenario: a weak random key is created, then some good random keys are created
         // but the weakness of the first isn't known yet. The wallet is upgraded to HD based on the weak key. Later, we

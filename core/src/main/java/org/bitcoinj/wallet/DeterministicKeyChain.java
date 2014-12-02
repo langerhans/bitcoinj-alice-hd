@@ -444,8 +444,8 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         this.rootNodeList = ACCOUNT_ZERO_PATH;
         basicKeyChain = new BasicKeyChain(crypter);
         if (!seed.isEncrypted()) {
-            rootKey = HDKeyDerivation.createMasterPrivateKey(ACCOUNT_ZERO_PATH, checkNotNull(seed.getSeedBytes()));
-            //rootKey = HDKeyDerivation.createMasterPrivateKey(ImmutableList.<ChildNumber>builder().build(), checkNotNull(seed.getSeedBytes()));
+            //rootKey = HDKeyDerivation.createMasterPrivateKey(ACCOUNT_ZERO_PATH, checkNotNull(seed.getSeedBytes()));
+            rootKey = HDKeyDerivation.createMasterPrivateKey(ImmutableList.<ChildNumber>builder().build(), checkNotNull(seed.getSeedBytes()));
             rootKey.setCreationTimeSeconds(seed.getCreationTimeSeconds());
             initializeHierarchyUnencrypted(rootKey, ACCOUNT_ZERO_PATH);
         }
@@ -485,14 +485,14 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         DeterministicKey account = encryptNonLeaf(aesKey, chain, rootKey, rootKey.getPath());
         System.out.println("DeterministicKeyChain account: " + account);
         List<ChildNumber> externalPathAbsolute = Lists.newArrayList();
-        externalPathAbsolute.addAll(rootNodeList);
+        externalPathAbsolute.addAll(rootKey.getPath());
         externalPathAbsolute.addAll(EXTERNAL_PATH);
         System.out.println("DeterministicKeyChain externalPathAbsolute: " + externalPathAbsolute);
         externalKey = encryptNonLeaf(aesKey, chain, account, ImmutableList.copyOf(externalPathAbsolute));
         System.out.println("DeterministicKeyChain externalKey:" + externalKey);
 
         List<ChildNumber> internalPathAbsolute = Lists.newArrayList();
-        internalPathAbsolute.addAll(rootNodeList);
+        internalPathAbsolute.addAll(rootKey.getPath());
         internalPathAbsolute.addAll(INTERNAL_PATH);
         System.out.println("DeterministicKeyChain internalPathAbsolute: " + internalPathAbsolute);
         internalKey = encryptNonLeaf(aesKey, chain, account,  ImmutableList.copyOf(internalPathAbsolute));
@@ -1025,7 +1025,8 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
 
                         chain.rootKey = detkey;
                         chain.hierarchy = new DeterministicHierarchy(detkey);
-                  } else if (path.size() == 2 || (isTrezor && path.size() == 6)) {
+                  } else if ((!isTrezor && (path.size() == 1 || path.size() == 2))
+                          || (isTrezor && path.size() == 6)) {
                         if (detkey.getChildNumber().num() == 0) {
                             chain.externalKey = detkey;
                             chain.issuedExternalKeys = key.getDeterministicKey().getIssuedSubkeys();
