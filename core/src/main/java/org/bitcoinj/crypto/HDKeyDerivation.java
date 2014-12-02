@@ -16,15 +16,16 @@
 
 package org.bitcoinj.crypto;
 
+import com.google.common.collect.ImmutableList;
 import org.bitcoinj.core.ECKey;
 import org.bitcoinj.core.Utils;
-import com.google.common.collect.ImmutableList;
 import org.spongycastle.crypto.macs.HMac;
 import org.spongycastle.math.ec.ECPoint;
 
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.security.SecureRandom;
+import java.util.ArrayList;
 import java.util.Arrays;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -91,7 +92,36 @@ public final class HDKeyDerivation {
        Arrays.fill(ir, (byte)0);
        // Child deterministic keys will chain up to their parents to find the keys.
        masterPrivKey.setCreationTimeSeconds(Utils.currentTimeSeconds());
+
        return masterPrivKey;
+   }
+
+   // ALICE
+  public static DeterministicKey createRootNodeWithPrivateKey(ImmutableList<ChildNumber> rootNodeList, byte[] seed) throws HDDerivationException {
+       checkArgument(seed.length > 8, "Seed is too short and could be brute forced");
+       // Calculate I = HMAC-SHA512(key="Bitcoin seed", msg=S)
+       byte[] i = HDUtils.hmacSha512(MASTER_HMAC_SHA512, seed);
+       // Split I into two 32-byte sequences, Il and Ir.
+       // Use Il as master secret key, and Ir as master chain code.
+       checkState(i.length == 64, i.length);
+       byte[] il = Arrays.copyOfRange(i, 0, 32);
+       byte[] ir = Arrays.copyOfRange(i, 32, 64);
+       Arrays.fill(i, (byte)0);
+       DeterministicKey masterPrivKey = createMasterPrivKeyFromBytes(ImmutableList.copyOf(new ArrayList<ChildNumber>()), il, ir);
+       Arrays.fill(il, (byte)0);
+       Arrays.fill(ir, (byte)0);
+       // Child deterministic keys will chain up to their parents to find the keys.
+       masterPrivKey.setCreationTimeSeconds(Utils.currentTimeSeconds());
+       System.out.println("HDKeyDerivation#createRootNodeWithPrivateKey masterPrivKey = " + masterPrivKey);
+
+       // The masterPrivateKey generated is the very top node in a hierarchy
+       // Generate the key that matches the rootNodeList passed in
+       DeterministicKey childKey = masterPrivKey;
+       for (ChildNumber childNumber : rootNodeList) {
+         childKey= HDKeyDerivation.deriveChildKey(childKey, childNumber);
+         System.out.println("HDKeyDerivation#createRootNodeWithPrivateKey childKey = " + childKey);
+       }
+       return childKey;
    }
 
     /**

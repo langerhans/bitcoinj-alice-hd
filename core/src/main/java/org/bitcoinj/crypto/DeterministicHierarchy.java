@@ -55,6 +55,7 @@ public class DeterministicHierarchy implements Serializable {
     public DeterministicHierarchy(DeterministicKey rootKey) {
         putKey(rootKey);
         rootPath = rootKey.getPath();
+        System.out.println("DeterministicHierarchy created with rootPath:" + rootPath);
     }
 
     /**

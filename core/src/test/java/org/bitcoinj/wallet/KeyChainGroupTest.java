@@ -16,13 +16,15 @@
 
 package org.bitcoinj.wallet;
 
+import com.google.common.collect.ImmutableList;
 import org.bitcoinj.core.*;
-import org.bitcoinj.crypto.*;
+import org.bitcoinj.crypto.DeterministicKey;
+import org.bitcoinj.crypto.KeyCrypterException;
+import org.bitcoinj.crypto.KeyCrypterScrypt;
+import org.bitcoinj.crypto.MnemonicCode;
 import org.bitcoinj.params.MainNetParams;
 import org.bitcoinj.utils.BriefLogFormatter;
 import org.bitcoinj.utils.Threading;
-import com.google.common.collect.ImmutableList;
-import org.bitcoinj.wallet.*;
 import org.junit.Before;
 import org.junit.Test;
 import org.spongycastle.crypto.params.KeyParameter;
@@ -33,7 +35,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static org.junit.Assert.*;
-import static org.junit.Assert.assertArrayEquals;
 
 public class KeyChainGroupTest {
     // Number of initial keys in this tests HD wallet, including interior keys.
@@ -409,6 +410,7 @@ public class KeyChainGroupTest {
 
     @Test
     public void serialization() throws Exception {
+        System.out.println("KeyChainGroupTest#serialisation group:" + group.getActiveKeyChain().getKeys(true).toString());
         assertEquals(INITIAL_KEYS + 1 /* for the seed */, group.serializeToProtobuf().size());
         group = KeyChainGroup.fromProtobufUnencrypted(params, group.serializeToProtobuf());
         group.freshKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
@@ -484,6 +486,9 @@ public class KeyChainGroupTest {
         ECKey key1 = group.freshKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
         final DeterministicSeed seed = checkNotNull(group.getActiveKeyChain().getSeed());
         KeyChainGroup group2 = new KeyChainGroup(params, seed);
+        final DeterministicSeed rebornSeed = group2.getActiveKeyChain().getSeed();
+        assertEquals(seed, rebornSeed);
+
         group2.setLookaheadSize(5);
         ECKey key2 = group2.freshKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
         assertEquals(key1, key2);
