@@ -1018,7 +1018,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                     // if need be.
                   System.out.println("DeterministicKeyChain#fromProtobuf - Loaded key with path: " + path + ", of size: " + path.size());
 
-                  if (path.size() == 0 || (path.size() == 2 && isTrezorPath(ImmutableList.copyOf(path)))) {
+                  if (path.size() == 0 || ((path.size() == 2 || path.size() == 3) && isTrezorPath(ImmutableList.copyOf(path)))) {
                         // Master key for regular wallet or Trezor = path [44H, 0H]
                         isTrezor = (path.size() == 2 && isTrezorPath(ImmutableList.copyOf(path)));
                         System.out.println("DeterministicKeyChain#fromProtobuf - Found rootKey of: " + detkey + ", isTrezor: " + isTrezor);
@@ -1026,7 +1026,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                         chain.rootKey = detkey;
                         chain.hierarchy = new DeterministicHierarchy(detkey);
                   } else if ((!isTrezor && (path.size() == 1 || path.size() == 2))
-                          || (isTrezor && path.size() == 6)) {
+                          || (isTrezor && (path.size() == 5 || path.size() == 6))) {
                         if (detkey.getChildNumber().num() == 0) {
                             chain.externalKey = detkey;
                             chain.issuedExternalKeys = key.getDeterministicKey().getIssuedSubkeys();
