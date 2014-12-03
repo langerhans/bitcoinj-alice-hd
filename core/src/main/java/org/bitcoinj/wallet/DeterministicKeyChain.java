@@ -873,9 +873,12 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         int lookaheadSize = -1;
         int sigsRequiredToSpend = 1;
         boolean isTrezor = false;
+        boolean foundRootPath = false;
 
         for (Protos.Key key : keys) {
             final Protos.Key.Type t = key.getType();
+            System.out.println("DeterministicKeyChain#fromProtobuf - Loaded key: " + key);
+
             if (t == Protos.Key.Type.DETERMINISTIC_MNEMONIC) {
                 if (chain != null) {
                     log.debug("a lookaheadSize = " + lookaheadSize);
@@ -925,7 +928,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                 ECPoint pubkey = ECKey.CURVE.getCurve().decodePoint(key.getPublicKey().toByteArray());
                 final ImmutableList<ChildNumber> immutablePath = ImmutableList.copyOf(path);
                 // Possibly create the chain, if we didn't already do so yet.
-                boolean isWatchingAccountKey = false;
+                boolean isAccountKey = false;
                 boolean isFollowingKey = false;
                 // save previous chain if any if the key is marked as following. Current key and the next ones are to be
                 // placed in new following key chain
@@ -947,10 +950,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                     if (seed == null) {
                         DeterministicKey accountKey = new DeterministicKey(immutablePath, chainCode, pubkey, null, null);
 
-                        // ALICE is not restricted in this manner
-//                        if (!accountKey.getPath().equals(ACCOUNT_ZERO_PATH))
-//                            throw new UnreadableWalletException("Expecting account key but found key with path: " +
-//                                    HDUtils.formatPath(accountKey.getPath()));
+                        // ALICE
                         if (isMarried) {
                           chain = new MarriedKeyChain(accountKey);
                         } else {
@@ -958,7 +958,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                           chain = new DeterministicKeyChain(accountKey, isFollowingKey, immutablePath);
                         }
 
-                        isWatchingAccountKey = true;
+                        isAccountKey = true;
                         log.debug("B lookaheadSize = " + lookaheadSize);
                     } else {
                         if (isMarried) {
@@ -977,7 +977,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                 log.debug("c");
                 // Find the parent key assuming this is not the root key, and not an account key for a watching chain.
                 DeterministicKey parent = null;
-                if (!path.isEmpty() && !isWatchingAccountKey) {
+                if (!path.isEmpty() && !isAccountKey) {
                     ChildNumber index = path.removeLast();
                     // ALICE
                     try {
@@ -1011,16 +1011,18 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                     detkey.setCreationTimeSeconds(key.getCreationTimestamp() / 1000);
                 if (log.isDebugEnabled())
                     log.debug("Deserializing: DETERMINISTIC_KEY: {}", detkey);
-                if (!isWatchingAccountKey) {
+                //if (!isAccountKey) {
                     // If the non-encrypted case, the non-leaf keys (account, internal, external) have already been
                     // rederived and inserted at this point and the two lines below are just a no-op. In the encrypted
                     // case though, we can't rederive and we must reinsert, potentially building the hierarchy object
                     // if need be.
-                  System.out.println("DeterministicKeyChain#fromProtobuf - Loaded key with path: " + path + ", of size: " + path.size());
 
-                  if (path.size() == 0 || ((path.size() == 2 || path.size() == 3) && isTrezorPath(ImmutableList.copyOf(path)))) {
-                        // Master key for regular wallet or Trezor = path [44H, 0H]
-                        isTrezor = (path.size() == 2 && isTrezorPath(ImmutableList.copyOf(path)));
+                  boolean isTrezorRootPath = !foundRootPath && (path.size() == 1 || path.size() == 2 || path.size() == 3) && isTrezorPath(ImmutableList.copyOf(path));
+                  System.out.println("DeterministicKeyChain#fromProtobuf - isTrezorRootPath: " + isTrezorRootPath);
+                  if (path.size() == 0 || isTrezorRootPath) {
+                        // Master key for regular wallet or Trezor = path [44H], [44H, 0H] or [44H, 0H, 0H]
+                        isTrezor = isTrezorRootPath;
+                        foundRootPath = true;
                         System.out.println("DeterministicKeyChain#fromProtobuf - Found rootKey of: " + detkey + ", isTrezor: " + isTrezor);
 
                         chain.rootKey = detkey;
@@ -1037,8 +1039,13 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                             chain.issuedInternalKeys = key.getDeterministicKey().getIssuedSubkeys();
                         }
                   }
+                //}
+
+                if (chain.hierarchy == null) {
+                  System.out.println("DeterministicKeyChain#fromProtobuf - have a deterministic key but no hierarchy to add it to !");
+                } else {
+                  chain.hierarchy.putKey(detkey);
                 }
-                chain.hierarchy.putKey(detkey);
                 chain.basicKeyChain.importKey(detkey);
             }
         }
