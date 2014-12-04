@@ -122,13 +122,13 @@ public class WalletTest extends TestWithWallet {
 
         for (int i = 0; i < NUM_KEYS; i++) {
           shadowKeys.add(shadow.freshReceiveKey());
-          System.out.println("shadow key " + i + ", " + shadowKeys.get(i));
+          log.debug("shadow key " + i + ", " + shadowKeys.get(i));
         }
 
         List<ECKey> originalKeys = new ArrayList<ECKey>(NUM_KEYS);
         for (int i = 0; i < NUM_KEYS; i++) {
           originalKeys.add(wallet.freshReceiveKey());
-          System.out.println("original key " + i + ", " + originalKeys.get(i));
+          log.debug("original key " + i + ", " + originalKeys.get(i));
         }
 
         assertTrue(Arrays.equals(firstShadowKey.getPrivKeyBytes(), myKey.getPrivKeyBytes()));

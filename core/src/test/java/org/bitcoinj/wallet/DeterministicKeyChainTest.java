@@ -30,6 +30,8 @@ import org.bitcoinj.store.UnreadableWalletException;
 import org.bitcoinj.utils.Threading;
 import org.junit.Before;
 import org.junit.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.spongycastle.crypto.params.KeyParameter;
 
 import java.io.IOException;
@@ -40,6 +42,8 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static org.junit.Assert.*;
 
 public class DeterministicKeyChainTest {
+    private static final Logger log = LoggerFactory.getLogger(DeterministicKeyChainTest.class);
+
     private DeterministicKeyChain chain;
     private final byte[] ENTROPY = Sha256Hash.create("don't use a string seed like this in real life".getBytes()).getBytes();
 
@@ -303,25 +307,25 @@ public class DeterministicKeyChainTest {
     public void trezorAccountChainUsingPrivateMasterKey() throws UnreadableWalletException {
         DeterministicSeed seed = new DeterministicSeed(TREZOR_SEED_PHRASE, null, "", secs);
         DeterministicKey privateMasterKey = HDKeyDerivation.createMasterPrivateKey(seed.getSeedBytes());
-        System.out.println("DeterministicKeyChainTest#trezorAccountChainUsingPrivateMasterKey privateMasterKey = " + privateMasterKey);
+        log.debug("privateMasterKey = " + privateMasterKey);
 
         DeterministicKey key_m_44h = HDKeyDerivation.deriveChildKey(privateMasterKey, new ChildNumber(44 | ChildNumber.HARDENED_BIT));
-        System.out.println("DeterministicKeyChainTest#trezorAccountChainUsingPrivateMasterKey key_m_44h deterministic key = " + key_m_44h);
+        log.debug("key_m_44h deterministic key = " + key_m_44h);
 
         DeterministicKey key_m_44h_0h = HDKeyDerivation.deriveChildKey(key_m_44h, ChildNumber.ZERO_HARDENED);
-        System.out.println("DeterministicKeyChainTest#trezorAccountChainUsingPrivateMasterKey key_m_44h_0h deterministic key = " + key_m_44h_0h);
+        log.debug("key_m_44h_0h deterministic key = " + key_m_44h_0h);
 
         DeterministicHierarchy deterministicHierarchy = new DeterministicHierarchy(key_m_44h_0h);
 
         DeterministicKey key_m_44h_0h_0h = deterministicHierarchy.deriveChild(key_m_44h_0h.getPath(), false, false, new ChildNumber(0, true));
-        System.out.println("DeterministicKeyChainTest#trezorAccountChainUsingPrivateMasterKey key_m_44h_0h_0h = " + key_m_44h_0h_0h);
+        log.debug("key_m_44h_0h_0h = " + key_m_44h_0h_0h);
 
         ImmutableList<ChildNumber> key_m_44h_0h_0h_path = key_m_44h_0h_0h.getPath();
-        System.out.println("DeterministicKeyChainTest#trezorAccountChainUsingPrivateMasterKey key_m_44h_0h_0h_path = " + key_m_44h_0h_0h_path);
+        log.debug("key_m_44h_0h_0h_path = " + key_m_44h_0h_0h_path);
 
         // Generate a chain using the derived key i.e. master private key is available
         DeterministicKeyChain accountChain = new DeterministicKeyChain(seed, key_m_44h_0h_0h_path);
-        System.out.println("DeterministicKeyChainTest#accountChain accountChain = " + accountChain);
+        log.debug("accountChain = " + accountChain);
 
         assertNotNull(accountChain.getSeed());
         assertEquals(secs, accountChain.getSeed().getCreationTimeSeconds());
@@ -344,7 +348,7 @@ public class DeterministicKeyChainTest {
         DeterministicSeed seed = new DeterministicSeed(TREZOR_SEED_PHRASE, null, "", secs);
 
         DeterministicKey privateMasterKey = HDKeyDerivation.createMasterPrivateKey(seed.getSeedBytes());
-        System.out.println("DeterministicKeyChainTest#accountChainUsingPublicMasterKey privateMasterKey = " + privateMasterKey);
+        log.debug("privateMasterKey = " + privateMasterKey);
 
         DeterministicKey key_m_44h = HDKeyDerivation.deriveChildKey(privateMasterKey, new ChildNumber(44 | ChildNumber.HARDENED_BIT));
 
@@ -367,19 +371,19 @@ public class DeterministicKeyChainTest {
     private void checkAccountChain(DeterministicKeyChain accountChain) {
        // Check the seed phrase given generates the expected BIP44 addresses
         DeterministicKey key0 = accountChain.getKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
-        System.out.println("DeterministicKeyChainTest#accountChain m/44'/0'/0'/0/0 key = " + key0);
+        log.debug("m/44'/0'/0'/0/0 key = " + key0);
 
         DeterministicKey key1 = accountChain.getKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
-        System.out.println("DeterministicKeyChainTest#accountChain m/44'/0'/0'/0/1 key = " + key1);
+        log.debug("m/44'/0'/0'/0/1 key = " + key1);
 
         DeterministicKey key2 = accountChain.getKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
-        System.out.println("DeterministicKeyChainTest#accountChain m/44'/0'/0'/0/2 key = " + key2);
+        log.debug("m/44'/0'/0'/0/2 key = " + key2);
 
         DeterministicKey key3 = accountChain.getKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
-        System.out.println("DeterministicKeyChainTest#accountChain m/44'/0'/0'/0/3 key = " + key3);
+        log.debug("m/44'/0'/0'/0/3 key = " + key3);
 
         DeterministicKey key4 = accountChain.getKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
-        System.out.println("DeterministicKeyChainTest#accountChain m/44'/0'/0'/0/4 key = " + key4);
+        log.debug("m/44'/0'/0'/0/4 key = " + key4);
 
         assertEquals(EXPECTED_ADDRESS_0, key0.toAddress(mainnet).toString());
         assertEquals(EXPECTED_ADDRESS_1, key1.toAddress(mainnet).toString());

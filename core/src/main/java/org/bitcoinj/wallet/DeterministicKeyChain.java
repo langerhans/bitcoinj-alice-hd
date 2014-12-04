@@ -337,7 +337,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
       this.rootNodeList = rootNodeList;
       basicKeyChain = new BasicKeyChain(crypter);
       if (!seed.isEncrypted()) {
-          System.out.println("DeterministicKeyChain - seed is NOT encrypted, rootNodeList:" + rootNodeList);
+          log.debug("seed is NOT encrypted, rootNodeList:" + rootNodeList);
           if (ACCOUNT_ZERO_PATH.equals(rootNodeList)) {
             // Non Trezor root node derivation
             rootKey = HDKeyDerivation.createMasterPrivateKey(checkNotNull(seed.getSeedBytes()));
@@ -347,11 +347,11 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
           }
 
           rootKey.setCreationTimeSeconds(seed.getCreationTimeSeconds());
-          System.out.println("DeterministicKeyChain - rootKey is:" + rootKey);
+          log.debug("rootKey is:" + rootKey);
 
           initializeHierarchyUnencrypted(rootKey, rootNodeList);
       } else {
-        System.out.println("DeterministicKeyChain - seed IS encrypted");
+        log.debug("seed IS encrypted");
       }
     }
 
@@ -477,26 +477,26 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         this.rootNodeList = rootNodeList;
         basicKeyChain = new BasicKeyChain(crypter);
         // The first number is the "account number" but we don't use that feature.
-        System.out.println("DeterministicKeyChain unencrypted rootKey: " + chain.rootKey);
+        log.debug("unencrypted rootKey: " + chain.rootKey);
         rootKey = chain.rootKey.encrypt(crypter, aesKey, null);
         hierarchy = new DeterministicHierarchy(rootKey);
         basicKeyChain.importKey(rootKey);
 
         DeterministicKey account = encryptNonLeaf(aesKey, chain, rootKey, rootKey.getPath());
-        System.out.println("DeterministicKeyChain account: " + account);
+        log.debug("account: " + account);
         List<ChildNumber> externalPathAbsolute = Lists.newArrayList();
         externalPathAbsolute.addAll(rootKey.getPath());
         externalPathAbsolute.addAll(EXTERNAL_PATH);
-        System.out.println("DeterministicKeyChain externalPathAbsolute: " + externalPathAbsolute);
+        log.debug("externalPathAbsolute: " + externalPathAbsolute);
         externalKey = encryptNonLeaf(aesKey, chain, account, ImmutableList.copyOf(externalPathAbsolute));
-        System.out.println("DeterministicKeyChain externalKey:" + externalKey);
+        log.debug("externalKey:" + externalKey);
 
         List<ChildNumber> internalPathAbsolute = Lists.newArrayList();
         internalPathAbsolute.addAll(rootKey.getPath());
         internalPathAbsolute.addAll(INTERNAL_PATH);
-        System.out.println("DeterministicKeyChain internalPathAbsolute: " + internalPathAbsolute);
+        log.debug("internalPathAbsolute: " + internalPathAbsolute);
         internalKey = encryptNonLeaf(aesKey, chain, account,  ImmutableList.copyOf(internalPathAbsolute));
-        System.out.println("DeterministicKeyChain internalKey:" + internalKey);
+        log.debug("internalKey:" + internalKey);
 
         // Now copy the (pubkey only) leaf keys across to avoid rederiving them. The private key bytes are missing
         // anyway so there's nothing to encrypt.
@@ -515,9 +515,9 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
     private DeterministicKey encryptNonLeaf(KeyParameter aesKey, DeterministicKeyChain chain,
                                             DeterministicKey parent, ImmutableList<ChildNumber> path) {
         DeterministicKey key = chain.hierarchy.get(path, false, true);
-        System.out.println("DeterministicKeyChain unencrypted key: " + key);
+        log.debug("unencrypted key: " + key);
         key = key.encrypt(checkNotNull(basicKeyChain.getKeyCrypter()), aesKey, parent);
-        System.out.println("DeterministicKeyChain encrypted key: " + key);
+        log.debug("encrypted key: " + key);
         hierarchy.putKey(key);
         basicKeyChain.importKey(key);
         return key;
@@ -535,13 +535,13 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
 
             hierarchy = new DeterministicHierarchy(rootKey);
             addToBasicChain(hierarchy.get(rootNodeList, false, true));
-            System.out.println("DeterministicKeyChain initialize 1 rootKey: " + rootKey);
+            log.debug("initialize 1 rootKey: " + rootKey);
         } else {
             // baseKey is a "watching key" that we were given so we could follow along with this account.
             rootKey = null;
             addToBasicChain(baseKey);
             hierarchy = new DeterministicHierarchy(baseKey);
-            System.out.println("DeterministicKeyChain initialize 2 rootKey: " + rootKey);
+            log.debug("initialize 2 rootKey: " + rootKey);
         }
         externalKey = hierarchy.deriveChild(rootNodeList, false, false, ChildNumber.ZERO);
         internalKey = hierarchy.deriveChild(rootNodeList, false, false, ChildNumber.ONE);
@@ -877,7 +877,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
 
         for (Protos.Key key : keys) {
             final Protos.Key.Type t = key.getType();
-            System.out.println("DeterministicKeyChain#fromProtobuf - Loaded key: " + key);
+            log.debug("Loaded key: " + key);
 
             if (t == Protos.Key.Type.DETERMINISTIC_MNEMONIC) {
                 if (chain != null) {
@@ -1018,12 +1018,12 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                     // if need be.
 
                   boolean isTrezorRootPath = !foundRootPath && (path.size() == 1 || path.size() == 2 || path.size() == 3) && isTrezorPath(ImmutableList.copyOf(path));
-                  System.out.println("DeterministicKeyChain#fromProtobuf - isTrezorRootPath: " + isTrezorRootPath);
+                  log.debug("isTrezorRootPath: " + isTrezorRootPath);
                   if (path.size() == 0 || isTrezorRootPath) {
                         // Master key for regular wallet or Trezor = path [44H], [44H, 0H] or [44H, 0H, 0H]
                         isTrezor = isTrezorRootPath;
                         foundRootPath = true;
-                        System.out.println("DeterministicKeyChain#fromProtobuf - Found rootKey of: " + detkey + ", isTrezor: " + isTrezor);
+                        log.debug("Found rootKey of: " + detkey + ", isTrezor: " + isTrezor);
 
                         chain.rootKey = detkey;
                         chain.hierarchy = new DeterministicHierarchy(detkey);
@@ -1042,7 +1042,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                 //}
 
                 if (chain.hierarchy == null) {
-                  System.out.println("DeterministicKeyChain#fromProtobuf - have a deterministic key but no hierarchy to add it to !");
+                  log.debug("have a deterministic key but no hierarchy to add it to !");
                 } else {
                   chain.hierarchy.putKey(detkey);
                 }

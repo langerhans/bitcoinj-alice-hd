@@ -19,6 +19,8 @@ package org.bitcoinj.crypto;
 import com.google.common.collect.ImmutableList;
 import org.bitcoinj.core.ECKey;
 import org.bitcoinj.core.Utils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.spongycastle.crypto.macs.HMac;
 import org.spongycastle.math.ec.ECPoint;
 
@@ -36,6 +38,8 @@ import static com.google.common.base.Preconditions.checkState;
  * deterministic wallet child key generation algorithm.
  */
 public final class HDKeyDerivation {
+    private static final Logger log = LoggerFactory.getLogger(HDKeyDerivation.class);
+
     // Some arbitrary random number. Doesn't matter what it is.
     private static final BigInteger RAND_INT = new BigInteger(256, new SecureRandom());
 
@@ -112,14 +116,14 @@ public final class HDKeyDerivation {
        Arrays.fill(ir, (byte)0);
        // Child deterministic keys will chain up to their parents to find the keys.
        masterPrivKey.setCreationTimeSeconds(Utils.currentTimeSeconds());
-       System.out.println("HDKeyDerivation#createRootNodeWithPrivateKey masterPrivKey = " + masterPrivKey);
+       log.debug("masterPrivKey = " + masterPrivKey);
 
        // The masterPrivateKey generated is the very top node in a hierarchy
        // Generate the key that matches the rootNodeList passed in
        DeterministicKey childKey = masterPrivKey;
        for (ChildNumber childNumber : rootNodeList) {
          childKey= HDKeyDerivation.deriveChildKey(childKey, childNumber);
-         System.out.println("HDKeyDerivation#createRootNodeWithPrivateKey childKey = " + childKey);
+         log.debug("childKey = " + childKey);
        }
        return childKey;
    }

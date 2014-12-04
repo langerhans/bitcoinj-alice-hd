@@ -190,7 +190,7 @@ public class KeyChainGroup implements KeyBag {
     public void createAndActivateNewHDChain(ImmutableList<ChildNumber> rootPathNode) {
         // We can't do auto upgrade here because we don't know the rotation time, if any.
         final DeterministicKeyChain chain = new DeterministicKeyChain(new SecureRandom(), rootPathNode);
-        System.out.println("createAndActivateNewHDChain - chain:" + chain);
+        log.debug("chain:" + chain);
         addAndActivateHDChain(chain);
     }
 
@@ -587,7 +587,7 @@ public class KeyChainGroup implements KeyBag {
             createAndActivateNewHDChain(rootNodeList);
         }
         for (DeterministicKeyChain chain : chains) {
-          System.out.println("KeyChainGroup - chain: " + chain.toString());
+          log.debug("chain: " + chain.toString());
           newChains.add(chain.toEncrypted(keyCrypter, aesKey, rootNodeList));
         }
         this.keyCrypter = keyCrypter;
