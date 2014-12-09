@@ -703,6 +703,7 @@ public class KeyChainGroup implements KeyBag {
     }
 
     public static KeyChainGroup fromProtobufUnencrypted(NetworkParameters params, List<Protos.Key> keys) throws UnreadableWalletException {
+        System.out.println("KeyChainGroup#fromProtobufUnencrypted There are " + (keys == null ? 0 : keys.size()) + " keys. The protobuf keys are {}" + keys);
         BasicKeyChain basicKeyChain = BasicKeyChain.fromProtobufUnencrypted(keys);
         List<DeterministicKeyChain> chains = DeterministicKeyChain.fromProtobuf(keys, null);
         EnumMap<KeyChain.KeyPurpose, DeterministicKey> currentKeys = null;
@@ -714,6 +715,7 @@ public class KeyChainGroup implements KeyBag {
 
     public static KeyChainGroup fromProtobufEncrypted(NetworkParameters params, List<Protos.Key> keys, KeyCrypter crypter) throws UnreadableWalletException {
         checkNotNull(crypter);
+        System.out.println("KeyChainGroup#fromProtobufEncrypted There are " + (keys == null ? 0 : keys.size()) + " keys. The protobuf keys are {}" + keys);
         BasicKeyChain basicKeyChain = BasicKeyChain.fromProtobufEncrypted(keys, crypter);
         List<DeterministicKeyChain> chains = DeterministicKeyChain.fromProtobuf(keys, crypter);
         EnumMap<KeyChain.KeyPurpose, DeterministicKey> currentKeys = null;
@@ -803,20 +805,39 @@ public class KeyChainGroup implements KeyBag {
 
         EnumMap<KeyChain.KeyPurpose, DeterministicKey> currentKeys = new EnumMap<KeyChain.KeyPurpose, DeterministicKey>(KeyChain.KeyPurpose.class);
 
+        // Work out the path the are relative to
+        // For regular bitcoinj wallets the root is 0H/ with, say, the 4th external address as 0H/0/3
+        // and the third internal address as 0H/1/2
+
+        // For Trezor wallets the root is 44H/0H/0H.  The 4th external address as 44H/0H/0H/0/3
+        // and the third internal address as 44H/0H/0H/1/2
+        ImmutableList<ChildNumber> rootNodePath = ImmutableList.of(ChildNumber.ZERO_HARDENED);
+        if (activeChain.getRootKey() != null && !activeChain.getRootKey().getPath().isEmpty()) {
+          rootNodePath = activeChain.getRootKey().getPath();
+        }
+
         // assuming that only RECEIVE and CHANGE keys are being used at the moment, we will treat latest issued external key
         // as current RECEIVE key and latest issued internal key as CHANGE key. This should be changed as soon as other
         // kinds of KeyPurpose are introduced.
         if (activeChain.getIssuedExternalKeys() > 0) {
-            DeterministicKey currentExternalKey = activeChain.getKeyByPath(
-                    ImmutableList.of(ChildNumber.ZERO_HARDENED, ChildNumber.ZERO, new ChildNumber(activeChain.getIssuedExternalKeys() - 1))
-            );
+            List<ChildNumber> externalPath = Lists.newArrayList(rootNodePath);
+            externalPath.add(ChildNumber.ZERO);
+            externalPath.add(new ChildNumber(activeChain.getIssuedExternalKeys() - 1));
+
+            log.trace("externalPath: " + externalPath.toString());
+            DeterministicKey currentExternalKey = activeChain.getKeyByPath(ImmutableList.copyOf(externalPath));
+
             currentKeys.put(KeyChain.KeyPurpose.RECEIVE_FUNDS, currentExternalKey);
         }
 
         if (activeChain.getIssuedInternalKeys() > 0) {
-            DeterministicKey currentInternalKey = activeChain.getKeyByPath(
-                    ImmutableList.of(ChildNumber.ZERO_HARDENED, new ChildNumber(1), new ChildNumber(activeChain.getIssuedInternalKeys() - 1))
-            );
+          List<ChildNumber> internalPath = Lists.newArrayList(rootNodePath);
+            internalPath.add(new ChildNumber(1));
+            internalPath.add(new ChildNumber(activeChain.getIssuedInternalKeys() - 1));
+
+            log.trace("internalPath: " + internalPath.toString());
+            DeterministicKey currentInternalKey = activeChain.getKeyByPath(ImmutableList.copyOf(internalPath));
+
             currentKeys.put(KeyChain.KeyPurpose.CHANGE, currentInternalKey);
         }
         return currentKeys;

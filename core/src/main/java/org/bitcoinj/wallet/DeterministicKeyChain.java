@@ -837,8 +837,10 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
             proto.setType(Protos.Key.Type.DETERMINISTIC_KEY);
             final Protos.DeterministicKey.Builder detKey = proto.getDeterministicKeyBuilder();
             detKey.setChainCode(ByteString.copyFrom(key.getChainCode()));
-            for (ChildNumber num : key.getPath())
-                detKey.addPath(num.i());
+            for (ChildNumber num : key.getPath()) {
+              log.debug("Serialising a deterministic key with path {}", key.getPath());
+              detKey.addPath(num.i());
+            }
             if (key.equals(externalKey)) {
                 detKey.setIssuedSubkeys(issuedExternalKeys);
                 detKey.setLookaheadSize(lookaheadSize);
@@ -877,7 +879,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
 
         for (Protos.Key key : keys) {
             final Protos.Key.Type t = key.getType();
-            log.debug("Loaded key: " + key);
+            System.out.println("DeterministicKeyChain#fromProtobuf Loaded key: " + key + ", path:" + key.getDeterministicKey().getPathList());
 
             if (t == Protos.Key.Type.DETERMINISTIC_MNEMONIC) {
                 if (chain != null) {
@@ -1018,12 +1020,12 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                     // if need be.
 
                   boolean isTrezorRootPath = !foundRootPath && (path.size() == 1 || path.size() == 2 || path.size() == 3) && isTrezorPath(ImmutableList.copyOf(path));
-                  log.debug("isTrezorRootPath: " + isTrezorRootPath);
+                  System.out.println("DeterministicKeyChain#fromProtobuf  isTrezorRootPath: " + isTrezorRootPath);
                   if (path.size() == 0 || isTrezorRootPath) {
                         // Master key for regular wallet or Trezor = path [44H], [44H, 0H] or [44H, 0H, 0H]
                         isTrezor = isTrezorRootPath;
                         foundRootPath = true;
-                        log.debug("Found rootKey of: " + detkey + ", isTrezor: " + isTrezor);
+                        System.out.println("DeterministicKeyChain#fromProtobuf Found rootKey of: " + detkey + ", isTrezor: " + isTrezor);
 
                         chain.rootKey = detkey;
                         chain.hierarchy = new DeterministicHierarchy(detkey);
@@ -1042,9 +1044,10 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                 //}
 
                 if (chain.hierarchy == null) {
-                  log.debug("have a deterministic key but no hierarchy to add it to !");
+                  System.out.println("DeterministicKeyChain#fromProtobuf have a deterministic key but no hierarchy to add it to !");
                 } else {
                   chain.hierarchy.putKey(detkey);
+                  System.out.println("DeterministicKeyChain#fromProtobuf have put key to hierarchy");
                 }
                 chain.basicKeyChain.importKey(detkey);
             }
@@ -1489,4 +1492,9 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
     public static boolean isTrezorPath(ImmutableList<ChildNumber> path) {
       return path != null && path.size() > 0 && (new ChildNumber(44, true)).equals(path.get(0));
     }
+
+  @Nullable
+  public DeterministicKey getRootKey() {
+    return rootKey;
+  }
 }
