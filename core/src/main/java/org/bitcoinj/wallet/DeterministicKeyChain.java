@@ -544,7 +544,9 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
             log.debug("initialize 2 rootKey: " + rootKey);
         }
         externalKey = hierarchy.deriveChild(rootNodeList, false, false, ChildNumber.ZERO);
+        log.debug("Adding externalKey: {}", externalKey);
         internalKey = hierarchy.deriveChild(rootNodeList, false, false, ChildNumber.ONE);
+        log.debug("Adding internalKey: {}", internalKey);
         addToBasicChain(externalKey);
         addToBasicChain(internalKey);
     }
