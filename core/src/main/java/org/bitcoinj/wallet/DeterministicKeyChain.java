@@ -478,6 +478,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         basicKeyChain = new BasicKeyChain(crypter);
         // The first number is the "account number" but we don't use that feature.
         log.debug("unencrypted rootKey: " + chain.rootKey);
+
         rootKey = chain.rootKey.encrypt(crypter, aesKey, null);
         hierarchy = new DeterministicHierarchy(rootKey);
         basicKeyChain.importKey(rootKey);
@@ -486,26 +487,39 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         DeterministicKey account = encryptNonLeaf(aesKey, chain, rootKey, rootKey.getPath());
         log.debug("account: " + account);
 
-        DeterministicKey parent = account;
+        // For trezor soft wallets ensure there is an intermediate node between the M/44H/0H and M/44H/0H/0H/0 (namely M/44H/0H/0H)
+        // Only keys with private keys can do hardened child derivation
+        DeterministicKey intermediateKey = null;
+        ImmutableList<ChildNumber> relativeExternalPath = EXTERNAL_PATH;
+        ImmutableList<ChildNumber> relativeInternalPath = INTERNAL_PATH;
 
-        // Work in progress
-        //if (isTrezorPath(rootKey.getPath())) {
-        //  // For Trezor wallets add in M/44H/0H/0H
-        //  DeterministicKey intermediateKey = hierarchy.deriveChild(rootKey.getPath(), false, false, new ChildNumber(ChildNumber.HARDENED_BIT));
-        //  parent = intermediateKey;
-        //  System.out.println("Added intermediate node: " + intermediateKey);
-        //}
+        if (isTrezorPath(rootKey.getPath()) && chain.rootKey.hasPrivKey() && rootKey.getPath().size() == 2) {
+          // For Trezor soft wallets add in M/44H/0H/0H node if it is missing and use that as the parent to externalKey and internalKey
+          intermediateKey = HDKeyDerivation.deriveChildKey(chain.rootKey, new ChildNumber(ChildNumber.HARDENED_BIT));
+          intermediateKey = intermediateKey.encrypt(crypter, aesKey, account);
+          hierarchy.putKey(intermediateKey);
+          basicKeyChain.importKey(intermediateKey);
+          System.out.println("DeterministicKeyChain - Added intermediate node: " + intermediateKey);
+        }
+
+        if (isTrezorPath(rootKey.getPath())) {
+          relativeExternalPath =  ImmutableList.of(ChildNumber.ZERO);
+          relativeInternalPath =  ImmutableList.of(ChildNumber.ONE);
+        }
+
+        DeterministicKey parent = intermediateKey == null ? account : intermediateKey;
+
         List<ChildNumber> externalPathAbsolute = Lists.newArrayList();
-        externalPathAbsolute.addAll(rootKey.getPath());
-        externalPathAbsolute.addAll(EXTERNAL_PATH);
-        log.debug("externalPathAbsolute: " + externalPathAbsolute);
+        externalPathAbsolute.addAll(parent.getPath());
+        externalPathAbsolute.addAll(relativeExternalPath);
+        System.out.println("DeterministicKeyChain - externalPathAbsolute: " + externalPathAbsolute);
         externalKey = encryptNonLeaf(aesKey, chain, parent, ImmutableList.copyOf(externalPathAbsolute));
         log.debug("externalKey:" + externalKey);
 
         List<ChildNumber> internalPathAbsolute = Lists.newArrayList();
-        internalPathAbsolute.addAll(rootKey.getPath());
-        internalPathAbsolute.addAll(INTERNAL_PATH);
-        log.debug("internalPathAbsolute: " + internalPathAbsolute);
+        internalPathAbsolute.addAll(parent.getPath());
+        internalPathAbsolute.addAll(relativeInternalPath);
+        System.out.println("DeterministicKeyChain - " + internalPathAbsolute);
         internalKey = encryptNonLeaf(aesKey, chain, parent,  ImmutableList.copyOf(internalPathAbsolute));
         log.debug("internalKey:" + internalKey);
 
@@ -1137,6 +1151,18 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
           trezorRootNodePath.add(new ChildNumber(ChildNumber.HARDENED_BIT));
           trezorRootNodePath.add(new ChildNumber(ChildNumber.HARDENED_BIT));
           chain = new DeterministicKeyChain(decSeed, ImmutableList.copyOf(trezorRootNodePath));
+
+          // Add in the intermediate m/44/0h/0h/0 and m/44/oh/0h/1 nodes
+          DeterministicKey internalKeyDecrypted = internalKey.decrypt(getKeyCrypter(), aesKey);
+          chain.hierarchy.putKey(internalKeyDecrypted);
+          chain.basicKeyChain.importKey(internalKeyDecrypted);
+          System.out.println("DeterministicKeyChain - added internalKeyDecrypted: " + internalKeyDecrypted);
+
+          DeterministicKey externalKeyDecrypted = externalKey.decrypt(getKeyCrypter(), aesKey);
+          chain.hierarchy.putKey(externalKeyDecrypted);
+          chain.basicKeyChain.importKey(externalKeyDecrypted);
+          System.out.println("DeterministicKeyChain - added externalKeyDecrypted: " + externalKeyDecrypted);
+
         } else {
           chain = new DeterministicKeyChain(decSeed);
         }
@@ -1150,6 +1176,9 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
           }
         }
         chain.lookaheadSize = lookaheadSize;
+        chain.issuedExternalKeys = issuedExternalKeys;
+        chain.issuedInternalKeys = issuedInternalKeys;
+
         // Now copy the (pubkey only) leaf keys across to avoid rederiving them. The private key bytes are missing
         // anyway so there's nothing to decrypt.
         for (ECKey eckey : basicKeyChain.getKeys()) {
@@ -1164,8 +1193,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
             chain.hierarchy.putKey(key);
             chain.basicKeyChain.importKey(key);
         }
-        chain.issuedExternalKeys = issuedExternalKeys;
-        chain.issuedInternalKeys = issuedInternalKeys;
+
         return chain;
     }
 
