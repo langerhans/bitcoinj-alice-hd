@@ -482,31 +482,42 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         hierarchy = new DeterministicHierarchy(rootKey);
         basicKeyChain.importKey(rootKey);
 
+        // Top level node
         DeterministicKey account = encryptNonLeaf(aesKey, chain, rootKey, rootKey.getPath());
         log.debug("account: " + account);
+
+        DeterministicKey parent = account;
+
+        // Work in progress
+        //if (isTrezorPath(rootKey.getPath())) {
+        //  // For Trezor wallets add in M/44H/0H/0H
+        //  DeterministicKey intermediateKey = hierarchy.deriveChild(rootKey.getPath(), false, false, new ChildNumber(ChildNumber.HARDENED_BIT));
+        //  parent = intermediateKey;
+        //  System.out.println("Added intermediate node: " + intermediateKey);
+        //}
         List<ChildNumber> externalPathAbsolute = Lists.newArrayList();
         externalPathAbsolute.addAll(rootKey.getPath());
         externalPathAbsolute.addAll(EXTERNAL_PATH);
         log.debug("externalPathAbsolute: " + externalPathAbsolute);
-        externalKey = encryptNonLeaf(aesKey, chain, account, ImmutableList.copyOf(externalPathAbsolute));
+        externalKey = encryptNonLeaf(aesKey, chain, parent, ImmutableList.copyOf(externalPathAbsolute));
         log.debug("externalKey:" + externalKey);
 
         List<ChildNumber> internalPathAbsolute = Lists.newArrayList();
         internalPathAbsolute.addAll(rootKey.getPath());
         internalPathAbsolute.addAll(INTERNAL_PATH);
         log.debug("internalPathAbsolute: " + internalPathAbsolute);
-        internalKey = encryptNonLeaf(aesKey, chain, account,  ImmutableList.copyOf(internalPathAbsolute));
+        internalKey = encryptNonLeaf(aesKey, chain, parent,  ImmutableList.copyOf(internalPathAbsolute));
         log.debug("internalKey:" + internalKey);
 
         // Now copy the (pubkey only) leaf keys across to avoid rederiving them. The private key bytes are missing
         // anyway so there's nothing to encrypt.
         for (ECKey eckey : chain.basicKeyChain.getKeys()) {
             DeterministicKey key = (DeterministicKey) eckey;
-            if ((!isTrezorPath(key.getPath()) && key.getPath().size() != 3) ||
-                (isTrezorPath(key.getPath()) && key.getPath().size() != 5)) continue; // Not a leaf key - Trezor leaves are of form e.g. [44H, 0H, 0H, 0H, 1]
-            DeterministicKey parent = hierarchy.get(checkNotNull(key.getParent()).getPath(), false, false);
+            if ((!isTrezorPath(key.getPath()) && key.getPath().size() != 3) ||        // Not a leaf key for a regular bitcoinj wallet (e.g. M/0H/0/0)
+                (isTrezorPath(key.getPath()) && key.getPath().size() != 5)) continue; // Not a leaf key - Trezor leaves are of form e.g. (M/44H/0H/0H/0/1)
+            DeterministicKey parentKey = hierarchy.get(checkNotNull(key.getParent()).getPath(), false, false);
             // Clone the key to the new encrypted hierarchy.
-            key = new DeterministicKey(key.getPubOnly(), parent);
+            key = new DeterministicKey(key.getPubOnly(), parentKey);
             hierarchy.putKey(key);
             basicKeyChain.importKey(key);
         }
@@ -543,10 +554,19 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
             hierarchy = new DeterministicHierarchy(baseKey);
             log.debug("initialize 2 rootKey: " + rootKey);
         }
-        externalKey = hierarchy.deriveChild(rootNodeList, false, false, ChildNumber.ZERO);
+
+        if (isTrezorPath(rootNodeList)) {
+          // Ensure that parents of the external and internal key nodes are present in the hierarchy
+          externalKey = hierarchy.deriveChild(rootNodeList, false, true, ChildNumber.ZERO);
+          internalKey = hierarchy.deriveChild(rootNodeList, false, true, ChildNumber.ONE);
+        } else {
+          externalKey = hierarchy.deriveChild(rootNodeList, false, false, ChildNumber.ZERO);
+          internalKey = hierarchy.deriveChild(rootNodeList, false, false, ChildNumber.ONE);
+        }
+
         log.debug("Adding externalKey: {}", externalKey);
-        internalKey = hierarchy.deriveChild(rootNodeList, false, false, ChildNumber.ONE);
         log.debug("Adding internalKey: {}", internalKey);
+
         addToBasicChain(externalKey);
         addToBasicChain(internalKey);
     }
@@ -1110,7 +1130,18 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         checkState(seed.isEncrypted());
         String passphrase = DEFAULT_PASSPHRASE_FOR_MNEMONIC; // FIXME allow non-empty passphrase
         DeterministicSeed decSeed = seed.decrypt(getKeyCrypter(), passphrase, aesKey);
-        DeterministicKeyChain chain = new DeterministicKeyChain(decSeed);  // TODO set path ?
+        DeterministicKeyChain chain;
+        if (rootKey != null && isTrezorPath(rootKey.getPath())) {
+          List<ChildNumber> trezorRootNodePath = new ArrayList<ChildNumber>();
+          trezorRootNodePath.add(new ChildNumber(44 | ChildNumber.HARDENED_BIT));
+          trezorRootNodePath.add(new ChildNumber(ChildNumber.HARDENED_BIT));
+          trezorRootNodePath.add(new ChildNumber(ChildNumber.HARDENED_BIT));
+          chain = new DeterministicKeyChain(decSeed, ImmutableList.copyOf(trezorRootNodePath));
+        } else {
+          chain = new DeterministicKeyChain(decSeed);
+        }
+        System.out.println("DeterministicKeyChain - root of decrypted chain: " + chain.toString());
+
         // Now double check that the keys match to catch the case where the key is wrong but padding didn't catch it.
         // ALICE
         if (chain.rootKey != null && rootKey != null && chain.rootKey.getPath().equals(rootKey.getPath())) {
@@ -1124,11 +1155,12 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         for (ECKey eckey : basicKeyChain.getKeys()) {
             DeterministicKey key = (DeterministicKey) eckey;
           if ((!isTrezorPath(key.getPath()) && key.getPath().size() != 3) ||
-             (isTrezorPath(key.getPath()) && key.getPath().size() != 5)) continue; // Not a leaf key - Trezor leaves are of form e.g. [44H, 0H, 0H, 0H, 1]
+             (isTrezorPath(key.getPath()) && key.getPath().size() != 5)) continue; // Not a leaf key - Trezor leaves are of form e.g. [44H, 0H, 0H, 0, 1]
             checkState(key.isEncrypted());
             DeterministicKey parent = chain.hierarchy.get(checkNotNull(key.getParent()).getPath(), false, false);
             // Clone the key to the new decrypted hierarchy.
             key = new DeterministicKey(key.getPubOnly(), parent);
+            System.out.println("DeterministicKeyChain - cloned, decrypted key: " + key.toString());
             chain.hierarchy.putKey(key);
             chain.basicKeyChain.importKey(key);
         }
