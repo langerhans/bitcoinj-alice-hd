@@ -715,7 +715,7 @@ public class KeyChainGroup implements KeyBag {
 
     public static KeyChainGroup fromProtobufEncrypted(NetworkParameters params, List<Protos.Key> keys, KeyCrypter crypter) throws UnreadableWalletException {
         checkNotNull(crypter);
-        System.out.println("KeyChainGroup#fromProtobufEncrypted There are " + (keys == null ? 0 : keys.size()) + " keys. The protobuf keys are {}" + keys);
+        System.out.println("KeyChainGroup#fromProtobufEncrypted There are " + (keys == null ? 0 : keys.size()) + " keys.");
         BasicKeyChain basicKeyChain = BasicKeyChain.fromProtobufEncrypted(keys, crypter);
         List<DeterministicKeyChain> chains = DeterministicKeyChain.fromProtobuf(keys, crypter);
         EnumMap<KeyChain.KeyPurpose, DeterministicKey> currentKeys = null;
