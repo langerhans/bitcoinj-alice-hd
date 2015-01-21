@@ -819,6 +819,7 @@ public class KeyChainGroup implements KeyBag {
             List<ChildNumber> rootNodePathMutable = new ArrayList<ChildNumber>();
             rootNodePathMutable.add(new ChildNumber(44 | ChildNumber.HARDENED_BIT));
             rootNodePathMutable.add(new ChildNumber(ChildNumber.HARDENED_BIT));
+            rootNodePathMutable.add(new ChildNumber(ChildNumber.HARDENED_BIT));
             rootNodePath = ImmutableList.copyOf(rootNodePathMutable);
           }
         }
@@ -832,7 +833,7 @@ public class KeyChainGroup implements KeyBag {
             externalPath.add(ChildNumber.ZERO);
             externalPath.add(new ChildNumber(activeChain.getIssuedExternalKeys() - 1));
 
-            log.trace("externalPath: " + externalPath.toString());
+            log.debug("externalPath: " + externalPath.toString());
             DeterministicKey currentExternalKey = activeChain.getKeyByPath(ImmutableList.copyOf(externalPath));
 
             currentKeys.put(KeyChain.KeyPurpose.RECEIVE_FUNDS, currentExternalKey);
@@ -843,7 +844,7 @@ public class KeyChainGroup implements KeyBag {
             internalPath.add(new ChildNumber(1));
             internalPath.add(new ChildNumber(activeChain.getIssuedInternalKeys() - 1));
 
-            log.trace("internalPath: " + internalPath.toString());
+            log.debug("internalPath: " + internalPath.toString());
             DeterministicKey currentInternalKey = activeChain.getKeyByPath(ImmutableList.copyOf(internalPath));
 
             currentKeys.put(KeyChain.KeyPurpose.CHANGE, currentInternalKey);
