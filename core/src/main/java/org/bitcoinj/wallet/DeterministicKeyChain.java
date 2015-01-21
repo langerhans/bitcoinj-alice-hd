@@ -1056,7 +1056,6 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                     // if need be.
 
                   boolean isTrezorRootPath = !foundRootPath && (path.size() == 1 || path.size() == 2 || path.size() == 3) && isTrezorPath(ImmutableList.copyOf(path));
-                  System.out.println("DeterministicKeyChain#fromProtobuf  isTrezorRootPath: " + isTrezorRootPath);
                   if (path.size() == 0 || isTrezorRootPath) {
                         // Master key for regular wallet or Trezor = path [44H], [44H, 0H] or [44H, 0H, 0H]
                         isTrezor = isTrezorRootPath;

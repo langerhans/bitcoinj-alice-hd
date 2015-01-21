@@ -813,8 +813,16 @@ public class KeyChainGroup implements KeyBag {
         // and the third internal address as 44H/0H/0H/1/2
         ImmutableList<ChildNumber> rootNodePath = ImmutableList.of(ChildNumber.ZERO_HARDENED);
         if (activeChain.getRootKey() != null && !activeChain.getRootKey().getPath().isEmpty()) {
-          rootNodePath = activeChain.getRootKey().getPath();
+
+          if (DeterministicKeyChain.isTrezorPath(activeChain.getRootKey().getPath())) {
+            // Trezor wallet
+            List<ChildNumber> rootNodePathMutable = new ArrayList<ChildNumber>();
+            rootNodePathMutable.add(new ChildNumber(44 | ChildNumber.HARDENED_BIT));
+            rootNodePathMutable.add(new ChildNumber(ChildNumber.HARDENED_BIT));
+            rootNodePath = ImmutableList.copyOf(rootNodePathMutable);
+          }
         }
+        log.debug("rootNodePath: {}", rootNodePath);
 
         // assuming that only RECEIVE and CHANGE keys are being used at the moment, we will treat latest issued external key
         // as current RECEIVE key and latest issued internal key as CHANGE key. This should be changed as soon as other
