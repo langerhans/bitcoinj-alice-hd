@@ -1056,17 +1056,24 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                     // if need be.
 
                   boolean isTrezorRootPath = !foundRootPath && (path.size() == 1 || path.size() == 2 || path.size() == 3) && isTrezorPath(ImmutableList.copyOf(path));
-                  //System.out.println("DeterministicKeyChain#fromProtobuf  isTrezorRootPath: " + isTrezorRootPath);
+                  System.out.println("DeterministicKeyChain#fromProtobuf  isTrezorRootPath: " + isTrezorRootPath);
                   if (path.size() == 0 || isTrezorRootPath) {
                         // Master key for regular wallet or Trezor = path [44H], [44H, 0H] or [44H, 0H, 0H]
                         isTrezor = isTrezorRootPath;
                         foundRootPath = true;
-                        //System.out.println("DeterministicKeyChain#fromProtobuf Found rootKey of: " + detkey + ", isTrezor: " + isTrezor);
+                        log.debug("Found rootKey of: " + detkey + ", isTrezor: " + isTrezor);
 
                         chain.rootKey = detkey;
                         chain.hierarchy = new DeterministicHierarchy(detkey);
                   } else if ((!isTrezor && (path.size() == 1 || path.size() == 2))
-                          || (isTrezor && (path.size() == 5 || path.size() == 6))) {
+                          || (isTrezor && path.size() == 4)) {
+                        // Look for the external and internal key from which the main receive and change addresses hang off
+                        // Regular:
+                        //   m/0h/0 external
+                        //   m/0h/1 internal
+                        // Trezor:
+                        //   m/44h/0h/0h/0 external
+                        //   m/44h/0h/0h/1
                         if (detkey.getChildNumber().num() == 0) {
                             chain.externalKey = detkey;
                             chain.issuedExternalKeys = key.getDeterministicKey().getIssuedSubkeys();
