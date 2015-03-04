@@ -72,6 +72,9 @@ public class WalletTest extends TestWithWallet {
 
     private SecureRandom secureRandom = new SecureRandom();
 
+    private ECKey someOtherKey = new ECKey();
+    private Address someOtherAddress = someOtherKey.toAddress(params);
+
     @Before
     @Override
     public void setUp() throws Exception {
@@ -403,7 +406,7 @@ public class WalletTest extends TestWithWallet {
         // Send some pending coins to the wallet.
         Transaction t1 = sendMoneyToWallet(wallet, amount, toAddress, null);
         Threading.waitForUserCode();
-        final ListenableFuture<Transaction> depthFuture = t1.getConfidence().getDepthFuture(1);
+        final ListenableFuture<TransactionConfidence> depthFuture = t1.getConfidence().getDepthFuture(1);
         assertFalse(depthFuture.isDone());
         assertEquals(ZERO, wallet.getBalance());
         assertEquals(amount, wallet.getBalance(Wallet.BalanceType.ESTIMATED));
@@ -800,13 +803,13 @@ public class WalletTest extends TestWithWallet {
         Transaction send3 = checkNotNull(wallet.createSend(address, value));
         wallet.commitTx(send3);
         assertEquals(ZERO, wallet.getBalance());
-        final LinkedList<Transaction> dead = new LinkedList<Transaction>();
+        final LinkedList<TransactionConfidence> dead = new LinkedList<TransactionConfidence>();
         final TransactionConfidence.Listener listener = new TransactionConfidence.Listener() {
             @Override
-            public void onConfidenceChanged(Transaction tx, ChangeReason reason) {
-                final TransactionConfidence.ConfidenceType type = tx.getConfidence().getConfidenceType();
+            public void onConfidenceChanged(TransactionConfidence confidence, ChangeReason reason) {
+                final TransactionConfidence.ConfidenceType type = confidence.getConfidenceType();
                 if (reason == ChangeReason.TYPE && type == TransactionConfidence.ConfidenceType.DEAD)
-                    dead.add(tx);
+                    dead.add(confidence);
             }
         };
         send2.getConfidence().addEventListener(listener, Threading.SAME_THREAD);
@@ -815,8 +818,8 @@ public class WalletTest extends TestWithWallet {
         sendMoneyToWallet(send1, AbstractBlockChain.NewBlockType.BEST_CHAIN);
         // Back to having one coin.
         assertEquals(value, wallet.getBalance());
-        assertEquals(send2, dead.poll());
-        assertEquals(send3, dead.poll());
+        assertEquals(send2.getHash(), dead.poll().getTransactionHash());
+        assertEquals(send3.getHash(), dead.poll().getTransactionHash());
     }
 
     @Test
@@ -928,7 +931,7 @@ public class WalletTest extends TestWithWallet {
         final TransactionConfidence.Listener.ChangeReason[] reasons = new TransactionConfidence.Listener.ChangeReason[1];
         notifiedTx[0].getConfidence().addEventListener(new TransactionConfidence.Listener() {
             @Override
-            public void onConfidenceChanged(Transaction tx, TransactionConfidence.Listener.ChangeReason reason) {
+            public void onConfidenceChanged(TransactionConfidence confidence, TransactionConfidence.Listener.ChangeReason reason) {
                 flags[1] = true;
                 reasons[0] = reason;
             }
@@ -1503,7 +1506,7 @@ public class WalletTest extends TestWithWallet {
         Transaction tx1 = createFakeTx(params, value, myAddress);
         Transaction tx2 = new Transaction(params);
         tx2.addInput(tx1.getOutput(0));
-        tx2.addOutput(valueOf(0, 9), new ECKey());
+        tx2.addOutput(valueOf(0, 9), someOtherAddress);
         // Add a change address to ensure this tx is relevant.
         tx2.addOutput(CENT, wallet.getChangeAddress());
         wallet.receivePending(tx2, null);
@@ -1514,6 +1517,26 @@ public class WalletTest extends TestWithWallet {
         assertEquals(1, wallet.getPoolSize(Pool.SPENT));
         assertEquals(1, wallet.getPoolSize(Pool.PENDING));
         assertEquals(0, wallet.getPoolSize(Pool.UNSPENT));
+    }
+
+    @Test
+    public void outOfOrderPendingTxns() throws Exception {
+        // Check that if there are two pending transactions which we receive out of order, they are marked as spent
+        // correctly. For instance, we are watching a wallet, someone pays us (A) and we then pay someone else (B)
+        // with a change address but the network delivers the transactions to us in order B then A.
+        Coin value = COIN;
+        Transaction a = createFakeTx(params, value, myAddress);
+        Transaction b = new Transaction(params);
+        b.addInput(a.getOutput(0));
+        b.addOutput(CENT, someOtherAddress);
+        Coin v = COIN.subtract(CENT);
+        b.addOutput(v, wallet.getChangeAddress());
+        a = roundTripTransaction(params, a);
+        b = roundTripTransaction(params, b);
+        wallet.receivePending(b, null);
+        assertEquals(v, wallet.getBalance(Wallet.BalanceType.ESTIMATED));
+        wallet.receivePending(a, null);
+        assertEquals(v, wallet.getBalance(Wallet.BalanceType.ESTIMATED));
     }
 
     @Test
@@ -1575,6 +1598,33 @@ public class WalletTest extends TestWithWallet {
         } catch (KeyCrypterException ede) {
             // Expected.
         }
+    }
+
+    @Test
+    public void changePasswordTest() {
+        Wallet encryptedWallet = new Wallet(params);
+        encryptedWallet.encrypt(PASSWORD1);
+        CharSequence newPassword = "My name is Tom";
+        encryptedWallet.changeEncryptionPassword(PASSWORD1, newPassword);
+        assertTrue(encryptedWallet.checkPassword(newPassword));
+        assertFalse(encryptedWallet.checkPassword(WRONG_PASSWORD));
+    }
+
+    @Test
+    public void changeAesKeyTest() {
+        Wallet encryptedWallet = new Wallet(params);
+        encryptedWallet.encrypt(PASSWORD1);
+
+        KeyCrypter keyCrypter = encryptedWallet.getKeyCrypter();
+        KeyParameter aesKey = keyCrypter.deriveKey(PASSWORD1);
+
+        CharSequence newPassword = "My name is Tom";
+        KeyParameter newAesKey = keyCrypter.deriveKey(newPassword);
+
+        encryptedWallet.changeEncryptionKey(keyCrypter, aesKey, newAesKey);
+
+        assertTrue(encryptedWallet.checkAESKey(newAesKey));
+        assertFalse(encryptedWallet.checkAESKey(aesKey));
     }
 
     @Test
@@ -3078,7 +3128,7 @@ public class WalletTest extends TestWithWallet {
 
     @Test(expected = java.lang.IllegalStateException.class)
     public void sendCoinsNoBroadcasterTest() throws InsufficientMoneyException {
-        ECKey key = ECKey.fromPrivate(BigInteger.ONE);
+        ECKey key = ECKey.fromPrivate(BigInteger.TEN);
         Address notMyAddr = key.toAddress(params);
         SendRequest req = SendRequest.to(notMyAddr.getParameters(), key, SATOSHI.multiply(12));
         wallet.sendCoins(req);
@@ -3086,12 +3136,23 @@ public class WalletTest extends TestWithWallet {
 
     @Test
     public void sendCoinsWithBroadcasterTest() throws InsufficientMoneyException {
-        ECKey key = ECKey.fromPrivate(BigInteger.ONE);
+        ECKey key = ECKey.fromPrivate(BigInteger.TEN);
         Address notMyAddr = key.toAddress(params);
         receiveATransactionAmount(wallet, myAddress, Coin.COIN);
         MockTransactionBroadcaster broadcaster = new MockTransactionBroadcaster(wallet);
         wallet.setTransactionBroadcaster(broadcaster);
         SendRequest req = SendRequest.to(notMyAddr.getParameters(), key, Coin.CENT);
         wallet.sendCoins(req);
+    }
+
+    @Test
+    public void fromKeys() {
+        ECKey key = ECKey.fromPrivate(Utils.HEX.decode("00905b93f990267f4104f316261fc10f9f983551f9ef160854f40102eb71cffdcc"));
+        Wallet wallet = Wallet.fromKeys(params, Arrays.asList(key));
+        assertEquals(1, wallet.getImportedKeys().size());
+        assertEquals(key, wallet.getImportedKeys().get(0));
+        wallet.upgradeToDeterministic(null);
+        String seed = wallet.getKeyChainSeed().toHexString();
+        assertEquals("5ca8cd6c01aa004d3c5396c628b78a4a89462f412f460a845b594ac42eceaa264b0e14dcd4fe73d4ed08ce06f4c28facfa85042d26d784ab2798a870bb7af556", seed);
     }
 }

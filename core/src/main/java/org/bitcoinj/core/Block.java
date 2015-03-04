@@ -1,5 +1,6 @@
 /**
  * Copyright 2011 Google Inc.
+ * Copyright 2014 Andreas Schildbach
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -82,8 +83,9 @@ public class Block extends Message {
     private long difficultyTarget; // "nBits"
     private long nonce;
 
+    // TODO: Get rid of all the direct accesses to this field. It's a long-since unnecessary holdover from the Dalvik days.
     /** If null, it means this object holds only the headers. */
-    List<Transaction> transactions;
+    @Nullable List<Transaction> transactions;
 
     /** Stores the hash of the block. If null, getHash() will recalculate it. */
     private transient Sha256Hash hash;
@@ -588,7 +590,7 @@ public class Block extends Message {
         s.append("   time: [");
         s.append(time);
         s.append("] ");
-        s.append(new Date(time * 1000));
+        s.append(Utils.dateTimeFormat(time * 1000));
         s.append("\n");
         s.append("   difficulty target (nBits): ");
         s.append(difficultyTarget);
@@ -948,10 +950,13 @@ public class Block extends Message {
         this.hash = null;
     }
 
-    /** Returns an immutable list of transactions held in this block. */
-    public List<Transaction> getTransactions() {
-       maybeParseTransactions();
-       return ImmutableList.copyOf(transactions);
+    /** Returns an immutable list of transactions held in this block, or null if this object represents just a header. */
+    public @Nullable List<Transaction> getTransactions() {
+        maybeParseTransactions();
+        if (transactions == null)
+            return null;
+        else
+            return ImmutableList.copyOf(transactions);
     }
 
     // ///////////////////////////////////////////////////////////////////////////////////////////////
@@ -1042,12 +1047,12 @@ public class Block extends Message {
 
     @VisibleForTesting
     public Block createNextBlock(@Nullable Address to, TransactionOutPoint prevOut) {
-        return createNextBlock(to, prevOut, Utils.currentTimeSeconds(), pubkeyForTesting, FIFTY_COINS);
+        return createNextBlock(to, prevOut, getTimeSeconds() + 5, pubkeyForTesting, FIFTY_COINS);
     }
 
     @VisibleForTesting
     public Block createNextBlock(@Nullable Address to, Coin value) {
-        return createNextBlock(to, null, Utils.currentTimeSeconds(), pubkeyForTesting, value);
+        return createNextBlock(to, null, getTimeSeconds() + 5, pubkeyForTesting, value);
     }
 
     @VisibleForTesting

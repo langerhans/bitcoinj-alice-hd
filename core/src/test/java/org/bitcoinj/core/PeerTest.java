@@ -31,6 +31,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
+import javax.annotation.*;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -56,7 +57,7 @@ public class PeerTest extends TestWithNetworkConnections {
     private Peer peer;
     private InboundMessageQueuer writeTarget;
     private static final int OTHER_PEER_CHAIN_HEIGHT = 110;
-    private MemoryPool memoryPool;
+    private TxConfidenceTable confidenceTable;
     private final AtomicBoolean fail = new AtomicBoolean(false);
 
 
@@ -77,10 +78,10 @@ public class PeerTest extends TestWithNetworkConnections {
     public void setUp() throws Exception {
         super.setUp();
 
-        memoryPool = new MemoryPool();
+        confidenceTable = blockChain.getContext().getConfidenceTable();
         VersionMessage ver = new VersionMessage(unitTestParams, 100);
         InetSocketAddress address = new InetSocketAddress("127.0.0.1", 4000);
-        peer = new Peer(unitTestParams, ver, new PeerAddress(address), blockChain, memoryPool);
+        peer = new Peer(unitTestParams, ver, new PeerAddress(address), blockChain);
         peer.addWallet(wallet);
     }
 
@@ -269,7 +270,7 @@ public class PeerTest extends TestWithNetworkConnections {
         // Check co-ordination of which peer to download via the memory pool.
         VersionMessage ver = new VersionMessage(unitTestParams, 100);
         InetSocketAddress address = new InetSocketAddress("127.0.0.1", 4242);
-        Peer peer2 = new Peer(unitTestParams, ver, new PeerAddress(address), blockChain, memoryPool);
+        Peer peer2 = new Peer(unitTestParams, ver, new PeerAddress(address), blockChain);
         peer2.addWallet(wallet);
         VersionMessage peerVersion = new VersionMessage(unitTestParams, OTHER_PEER_CHAIN_HEIGHT);
         peerVersion.clientVersion = 70001;
@@ -291,7 +292,7 @@ public class PeerTest extends TestWithNetworkConnections {
         GetDataMessage message = (GetDataMessage)outbound(writeTarget);
         assertEquals(1, message.getItems().size());
         assertEquals(tx.getHash(), message.getItems().get(0).hash);
-        assertTrue(memoryPool.maybeWasSeen(tx.getHash()));
+        assertTrue(confidenceTable.maybeWasSeen(tx.getHash()));
 
         // Advertising to peer2 results in no getdata message.
         inbound(writeTarget2, inv);
@@ -333,7 +334,7 @@ public class PeerTest extends TestWithNetworkConnections {
             }
 
             @Override
-            public synchronized void onBlocksDownloaded(Peer p, Block block, int blocksLeft) {
+            public synchronized void onBlocksDownloaded(Peer p, Block block, @Nullable FilteredBlock filteredBlock,  int blocksLeft) {
                 int newValue = newBlockMessagesReceived.incrementAndGet();
                 if (newValue != 3 || p != peer || !block.equals(b2) || blocksLeft != OTHER_PEER_CHAIN_HEIGHT - 2)
                     fail.set(true);
@@ -445,10 +446,16 @@ public class PeerTest extends TestWithNetworkConnections {
         blockChain.add(b1);
         Utils.rollMockClock(60 * 10);  // 10 minutes later.
         Block b2 = makeSolvedTestBlock(b1);
+        b2.setTime(Utils.currentTimeSeconds());
+        b2.solve();
         Utils.rollMockClock(60 * 10);  // 10 minutes later.
         Block b3 = makeSolvedTestBlock(b2);
+        b3.setTime(Utils.currentTimeSeconds());
+        b3.solve();
         Utils.rollMockClock(60 * 10);
         Block b4 = makeSolvedTestBlock(b3);
+        b4.setTime(Utils.currentTimeSeconds());
+        b4.solve();
 
         // Request headers until the last 2 blocks.
         peer.setDownloadParameters(Utils.currentTimeSeconds() - (600*2) + 1, false);

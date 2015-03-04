@@ -17,6 +17,7 @@
 
 package org.bitcoinj.core;
 
+import org.bitcoinj.core.ECKey.ECDSASignature;
 import org.bitcoinj.crypto.EncryptedData;
 import org.bitcoinj.crypto.KeyCrypter;
 import org.bitcoinj.crypto.KeyCrypterScrypt;
@@ -96,11 +97,15 @@ public class ECKeyTest {
         }
         List<ECKey.ECDSASignature> sigs = Futures.allAsList(sigFutures).get();
         for (ECKey.ECDSASignature signature : sigs) {
-            assertTrue(signature.s.compareTo(ECKey.HALF_CURVE_ORDER) <= 0);
+            assertTrue(signature.isCanonical());
         }
-        final ECKey.ECDSASignature duplicate = new ECKey.ECDSASignature(sigs.get(0).r, sigs.get(0).s);
-        assertEquals(sigs.get(0), duplicate);
-        assertEquals(sigs.get(0).hashCode(), duplicate.hashCode());
+        final ECDSASignature first = sigs.get(0);
+        final ECKey.ECDSASignature duplicate = new ECKey.ECDSASignature(first.r, first.s);
+        assertEquals(first, duplicate);
+        assertEquals(first.hashCode(), duplicate.hashCode());
+
+        final ECKey.ECDSASignature highS = new ECKey.ECDSASignature(first.r, ECKey.CURVE.getN().subtract(first.s));
+        assertFalse(highS.isCanonical());
     }
 
     @Test
@@ -318,8 +323,8 @@ public class ECKeyTest {
     public void testToString() throws Exception {
         ECKey key = ECKey.fromPrivate(BigInteger.TEN).decompress(); // An example private key.
         NetworkParameters params = MainNetParams.get();
-        assertEquals("ECKey{pub HEX=04a0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247c7893aba425419bc27a3b6c7e693a24c696f794c2ed877a1593cbee53b037368d7, isEncrypted=false}", key.toString());
-        assertEquals("ECKey{pub HEX=04a0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247c7893aba425419bc27a3b6c7e693a24c696f794c2ed877a1593cbee53b037368d7, priv HEX=000000000000000000000000000000000000000000000000000000000000000a, priv WIF=5HpHagT65TZzG1PH3CSu63k8DbpvD8s5ip4nEB3kEsreBoNWTw6, isEncrypted=false}", key.toStringWithPrivate(params));
+        assertEquals("ECKey{pub HEX=04a0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247c7893aba425419bc27a3b6c7e693a24c696f794c2ed877a1593cbee53b037368d7, isEncrypted=false, isPubKeyOnly=false}", key.toString());
+        assertEquals("ECKey{pub HEX=04a0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247c7893aba425419bc27a3b6c7e693a24c696f794c2ed877a1593cbee53b037368d7, priv HEX=000000000000000000000000000000000000000000000000000000000000000a, priv WIF=5HpHagT65TZzG1PH3CSu63k8DbpvD8s5ip4nEB3kEsreBoNWTw6, isEncrypted=false, isPubKeyOnly=false}", key.toStringWithPrivate(params));
     }
 
     @Test

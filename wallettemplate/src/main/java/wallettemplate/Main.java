@@ -1,10 +1,10 @@
 package wallettemplate;
 
+import com.google.common.util.concurrent.*;
+import javafx.scene.input.*;
 import org.bitcoinj.core.NetworkParameters;
 import org.bitcoinj.kits.WalletAppKit;
-import org.bitcoinj.params.MainNetParams;
-import org.bitcoinj.params.RegTestParams;
-import org.bitcoinj.params.TestNet3Params;
+import org.bitcoinj.params.*;
 import org.bitcoinj.utils.BriefLogFormatter;
 import org.bitcoinj.utils.Threading;
 import org.bitcoinj.wallet.DeterministicSeed;
@@ -30,7 +30,7 @@ import static wallettemplate.utils.GuiUtils.*;
 public class Main extends Application {
     public static String APP_NAME = "WalletTemplate";
 
-    public static NetworkParameters params = TestNet3Params.get();
+    public static NetworkParameters params = MainNetParams.get();
     public static WalletAppKit bitcoin;
     public static Main instance;
 
@@ -96,20 +96,27 @@ public class Main extends Application {
 
         mainWindow.show();
 
+        WalletSetPasswordController.estimateKeyDerivationTimeMsec();
+
+        bitcoin.addListener(new Service.Listener() {
+            @Override
+            public void failed(Service.State from, Throwable failure) {
+                GuiUtils.crashAlert(failure);
+            }
+        }, Platform::runLater);
         bitcoin.startAsync();
+
+        scene.getAccelerators().put(KeyCombination.valueOf("Shortcut+F"), () -> bitcoin.peerGroup().getDownloadPeer().close());
     }
 
     public void setupWalletKit(@Nullable DeterministicSeed seed) {
         // If seed is non-null it means we are restoring from backup.
-        bitcoin = new WalletAppKit(params, new File("."), APP_NAME) {
+        bitcoin = new WalletAppKit(params, new File("."), APP_NAME + "-" + params.getPaymentProtocolId()) {
             @Override
             protected void onSetupCompleted() {
                 // Don't make the user wait for confirmations for now, as the intention is they're sending it
                 // their own money!
                 bitcoin.wallet().allowSpendingUnconfirmedTransactions();
-                if (params != RegTestParams.get())
-                    bitcoin.peerGroup().setMaxConnections(11);
-                bitcoin.peerGroup().setBloomFilterFalsePositiveRate(0.00001);
                 Platform.runLater(controller::onBitcoinSetup);
             }
         };
@@ -120,6 +127,7 @@ public class Main extends Application {
         } else if (params == TestNet3Params.get()) {
             // As an example!
             bitcoin.useTor();
+            // bitcoin.setDiscovery(new HttpDiscovery(params, URI.create("http://localhost:8080/peers"), ECKey.fromPublicOnly(BaseEncoding.base16().decode("02cba68cfd0679d10b186288b75a59f9132b1b3e222f6332717cb8c4eb2040f940".toUpperCase()))));
         }
         bitcoin.setDownloadListener(controller.progressBarUpdater())
                .setBlockingStartup(false)

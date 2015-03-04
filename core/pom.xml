@@ -95,6 +95,7 @@
 
     <build>
         <plugins>
+            <!-- Ensure compilation is done under Java 6 for backwards compatibility -->
             <plugin>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <configuration>
@@ -121,7 +122,6 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-javadoc-plugin</artifactId>
-                <version>2.9.1</version>
                 <executions>
                     <execution>
                         <id>attach-javadocs</id>
@@ -164,7 +164,7 @@
                                     <!-- Format is URN of groupId:artifactId:version:type:classifier:scope:hash -->
                                     <!-- classifier is "null" if not present -->
                                     <urns>
-                                        <urn>org.bitcoinj:orchid:1.0:jar:null:compile:bd98285f39f88875bb91bde940d6ca2d020edaa4</urn>
+                                        <urn>org.bitcoinj:orchid:1.1:jar:null:compile:cc54aa849a4c3f5b3bfda90dd4286205b2a60e87</urn>
                                         <urn>cglib:cglib-nodep:2.2:jar:null:test:59afed7ab65e7ec6585d5bc60556c3cbd203532b</urn>
                                         <urn>com.google.code.findbugs:jsr305:2.0.1:jar:null:compile:516c03b21d50a644d538de0f0369c620989cd8f0</urn>
                                         <urn>com.google.guava:guava:16.0.1:jar:null:compile:5fa98cd1a63c99a44dd8d3b77e4762b066a5d0c5</urn>
@@ -181,6 +181,7 @@
                                         <urn>org.apache.maven.plugins:maven-enforcer-plugin:1.2:maven-plugin:null:runtime:6b755a9a0d618f8f57c0b5c4a0737a012e710a46</urn>
                                         <urn>org.apache.maven.plugins:maven-install-plugin:2.5.1:maven-plugin:null:runtime:b6f5a4b621b9c26699c8deadb20fdc35ce568e35</urn>
                                         <urn>org.apache.maven.plugins:maven-jar-plugin:2.5:maven-plugin:null:runtime:344d667f5ec8b90d03d698d096a1147672fc522f</urn>
+                                        <urn>org.apache.maven.plugins:maven-javadoc-plugin:2.9.1:maven-plugin:null:runtime:95ea7abf00e37e08bd927bf7e448c1e7fe4c6cb9</urn>
                                         <urn>org.apache.maven.plugins:maven-resources-plugin:2.6:maven-plugin:null:runtime:dd093ff6a4b680eae7ae83b5ab04310249fc6590</urn>
                                         <urn>org.apache.maven.plugins:maven-shade-plugin:2.3:maven-plugin:null:runtime:d136adc7abccc9c12adcad6ae7a9bc51b2b7184b</urn>
                                         <urn>org.apache.maven.plugins:maven-site-plugin:3.3:maven-plugin:null:runtime:77ba1752b1ac4c4339d6f11554800960a56a4ae1</urn>
@@ -467,7 +468,7 @@
         <dependency>
             <groupId>org.bitcoinj</groupId>
             <artifactId>orchid</artifactId>
-            <version>1.0</version>
+            <version>1.1</version>
         </dependency>
     </dependencies>
 

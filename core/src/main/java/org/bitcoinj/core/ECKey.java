@@ -112,8 +112,8 @@ public class ECKey implements EncryptableItem, Serializable {
         }
     };
 
-    /** The parameters of the secp256k1 curve that Bitcoin uses. */
-    public static final X9ECParameters CURVE_PARAMS = CustomNamedCurves.getByName("secp256k1");
+    // The parameters of the secp256k1 curve that Bitcoin uses.
+    private static final X9ECParameters CURVE_PARAMS = CustomNamedCurves.getByName("secp256k1");
 
     /** The parameters of the secp256k1 curve that Bitcoin uses. */
     public static final ECDomainParameters CURVE;
@@ -128,6 +128,10 @@ public class ECKey implements EncryptableItem, Serializable {
     private static final long serialVersionUID = -728224901792295832L;
 
     static {
+        // Init proper random number generator, as some old Android installations have bugs that make it unsecure.
+        if (Utils.isAndroidRuntime())
+            new LinuxSecureRandom();
+
         // Tell Bouncy Castle to precompute data that's needed during secp256k1 calculations. Increasing the width
         // number makes calculations faster, but at a cost of extra memory usage and with decreasing returns. 12 was
         // picked after consulting with the BC team.
@@ -141,7 +145,7 @@ public class ECKey implements EncryptableItem, Serializable {
     // The two parts of the key. If "priv" is set, "pub" can always be calculated. If "pub" is set but not "priv", we
     // can only verify signatures not make them.
     protected final BigInteger priv;  // A field element.
-    protected final ECPoint pub;
+    protected final LazyECPoint pub;
 
     // Creation time of the key in seconds since the epoch, or zero if the key was deserialized from a version that did
     // not have this field.
@@ -173,11 +177,23 @@ public class ECKey implements EncryptableItem, Serializable {
         ECPrivateKeyParameters privParams = (ECPrivateKeyParameters) keypair.getPrivate();
         ECPublicKeyParameters pubParams = (ECPublicKeyParameters) keypair.getPublic();
         priv = privParams.getD();
-        pub = CURVE.getCurve().decodePoint(pubParams.getQ().getEncoded(true));
+        pub = new LazyECPoint(CURVE.getCurve(), pubParams.getQ().getEncoded(true));
         creationTimeSeconds = Utils.currentTimeSeconds();
     }
 
     protected ECKey(@Nullable BigInteger priv, ECPoint pub) {
+        if (priv != null) {
+            // Try and catch buggy callers or bad key imports, etc. Zero and one are special because these are often
+            // used as sentinel values and because scripting languages have a habit of auto-casting true and false to
+            // 1 and 0 or vice-versa. Type confusion bugs could therefore result in private keys with these values.
+            checkArgument(!priv.equals(BigInteger.ZERO));
+            checkArgument(!priv.equals(BigInteger.ONE));
+        }
+        this.priv = priv;
+        this.pub = new LazyECPoint(checkNotNull(pub));
+    }
+
+    protected ECKey(@Nullable BigInteger priv, LazyECPoint pub) {
         this.priv = priv;
         this.pub = checkNotNull(pub);
     }
@@ -186,16 +202,24 @@ public class ECKey implements EncryptableItem, Serializable {
      * Utility for compressing an elliptic curve point. Returns the same point if it's already compressed.
      * See the ECKey class docs for a discussion of point compression.
      */
-    public static ECPoint compressPoint(ECPoint uncompressed) {
-        return CURVE.getCurve().decodePoint(uncompressed.getEncoded(true));
+    public static ECPoint compressPoint(ECPoint point) {
+        return point.isCompressed() ? point : CURVE.getCurve().decodePoint(point.getEncoded(true));
+    }
+
+    public static LazyECPoint compressPoint(LazyECPoint point) {
+        return point.isCompressed() ? point : new LazyECPoint(compressPoint(point.get()));
     }
 
     /**
      * Utility for decompressing an elliptic curve point. Returns the same point if it's already compressed.
      * See the ECKey class docs for a discussion of point compression.
      */
-    public static ECPoint decompressPoint(ECPoint compressed) {
-        return CURVE.getCurve().decodePoint(compressed.getEncoded(false));
+    public static ECPoint decompressPoint(ECPoint point) {
+        return !point.isCompressed() ? point : CURVE.getCurve().decodePoint(point.getEncoded(false));
+    }
+
+    public static LazyECPoint decompressPoint(LazyECPoint point) {
+        return !point.isCompressed() ? point : new LazyECPoint(decompressPoint(point.get()));
     }
 
     /**
@@ -283,7 +307,7 @@ public class ECKey implements EncryptableItem, Serializable {
         if (!pub.isCompressed())
             return this;
         else
-            return new ECKey(priv, decompressPoint(pub));
+            return new ECKey(priv, decompressPoint(pub.get()));
     }
 
     /**
@@ -340,12 +364,12 @@ public class ECKey implements EncryptableItem, Serializable {
             ECPoint point = CURVE.getG().multiply(privKey);
             if (compressed)
                 point = compressPoint(point);
-            this.pub = point;
+            this.pub = new LazyECPoint(point);
         } else {
             // We expect the pubkey to be in regular encoded form, just as a BigInteger. Therefore the first byte is
             // a special marker byte.
             // TODO: This is probably not a useful API and may be confusing.
-            this.pub = CURVE.getCurve().decodePoint(pubKey);
+            this.pub = new LazyECPoint(CURVE.getCurve(), pubKey);
         }
     }
 
@@ -431,7 +455,7 @@ public class ECKey implements EncryptableItem, Serializable {
 
     /** Gets the public key in the form of an elliptic curve point object from Bouncy Castle. */
     public ECPoint getPubKeyPoint() {
-        return pub;
+        return pub.get();
     }
 
     /**
@@ -479,6 +503,14 @@ public class ECKey implements EncryptableItem, Serializable {
         }
 
         /**
+         * Returns true if the S component is "low", that means it is below {@link ECKey#HALF_CURVE_ORDER}. See <a
+         * href="https://github.com/bitcoin/bips/blob/master/bip-0062.mediawiki#Low_S_values_in_signatures">BIP62</a>.
+         */
+        public boolean isCanonical() {
+            return s.compareTo(HALF_CURVE_ORDER) <= 0;
+        }
+
+        /**
          * Will automatically adjust the S component to be less than or equal to half the curve order, if necessary.
          * This is required because for every signature (r,s) the signature (r, -s (mod N)) is a valid signature of
          * the same message. However, we dislike the ability to modify the bits of a Bitcoin transaction after it's
@@ -486,7 +518,7 @@ public class ECKey implements EncryptableItem, Serializable {
          * considered legal and the other will be banned.
          */
         public ECDSASignature toCanonicalised() {
-            if (s.compareTo(HALF_CURVE_ORDER) > 0) {
+            if (!isCanonical()) {
                 // The order of the curve is the number of valid points that exist on that curve. If S is in the upper
                 // half of the number of valid points, then bring it back to the lower half. Otherwise, imagine that
                 //    N = 10
@@ -664,11 +696,11 @@ public class ECKey implements EncryptableItem, Serializable {
     /**
      * Verifies the given ASN.1 encoded ECDSA signature against a hash using the public key.
      *
-     * @param data      Hash of the data to verify.
+     * @param hash      Hash of the data to verify.
      * @param signature ASN.1 encoded signature.
      */
-    public boolean verify(byte[] data, byte[] signature) {
-        return ECKey.verify(data, signature, getPubKey());
+    public boolean verify(byte[] hash, byte[] signature) {
+        return ECKey.verify(hash, signature, getPubKey());
     }
 
     /**
@@ -676,6 +708,26 @@ public class ECKey implements EncryptableItem, Serializable {
      */
     public boolean verify(Sha256Hash sigHash, ECDSASignature signature) {
         return ECKey.verify(sigHash.getBytes(), signature, getPubKey());
+    }
+
+    /**
+     * Verifies the given ASN.1 encoded ECDSA signature against a hash using the public key, and throws an exception
+     * if the signature doesn't match
+     * @throws java.security.SignatureException if the signature does not match.
+     */
+    public void verifyOrThrow(byte[] hash, byte[] signature) throws SignatureException {
+        if (!verify(hash, signature))
+            throw new SignatureException();
+    }
+
+    /**
+     * Verifies the given R/S pair (signature) against a hash using the public key, and throws an exception
+     * if the signature doesn't match
+     * @throws java.security.SignatureException if the signature does not match.
+     */
+    public void verifyOrThrow(Sha256Hash sigHash, ECDSASignature signature) throws SignatureException {
+        if (!ECKey.verify(sigHash.getBytes(), signature, getPubKey()))
+            throw new SignatureException();
     }
 
     /**
@@ -1157,6 +1209,7 @@ public class ECKey implements EncryptableItem, Serializable {
         if (includePrivate)
             helper.add("encryptedPrivateKey", encryptedPrivateKey);
         helper.add("isEncrypted", isEncrypted());
+        helper.add("isPubKeyOnly", isPubKeyOnly());
         return helper.toString();
     }
 
@@ -1166,6 +1219,8 @@ public class ECKey implements EncryptableItem, Serializable {
         builder.append(address.toString());
         builder.append("  hash160:");
         builder.append(Utils.HEX.encode(getPubKeyHash()));
+        if (creationTimeSeconds > 0)
+            builder.append("  creationTimeSeconds:").append(creationTimeSeconds);
         builder.append("\n");
         if (includePrivateKeys) {
             builder.append("  ");

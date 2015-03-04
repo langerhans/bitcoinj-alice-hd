@@ -50,7 +50,6 @@ import static org.junit.Assert.*;
 public class ChannelConnectionTest extends TestWithWallet {
     private static final int CLIENT_MAJOR_VERSION = 1;
     private Wallet serverWallet;
-    private BlockChain serverChain;
     private AtomicBoolean fail;
     private BlockingQueue<Transaction> broadcasts;
     private TransactionBroadcaster mockBroadcaster;
@@ -58,7 +57,7 @@ public class ChannelConnectionTest extends TestWithWallet {
 
     private static final TransactionBroadcaster failBroadcaster = new TransactionBroadcaster() {
         @Override
-        public ListenableFuture<Transaction> broadcastTransaction(Transaction tx) {
+        public TransactionBroadcast broadcastTransaction(Transaction tx) {
             fail();
             return null;
         }
@@ -75,7 +74,6 @@ public class ChannelConnectionTest extends TestWithWallet {
         serverWallet = new Wallet(params);
         serverWallet.addExtension(new StoredPaymentChannelServerStates(serverWallet, failBroadcaster));
         serverWallet.freshReceiveKey();
-        serverChain = new BlockChain(params, serverWallet, blockStore);
         // Use an atomic boolean to indicate failure because fail()/assert*() dont work in network threads
         fail = new AtomicBoolean(false);
 
@@ -85,12 +83,12 @@ public class ChannelConnectionTest extends TestWithWallet {
         broadcastTxPause = new Semaphore(0);
         mockBroadcaster = new TransactionBroadcaster() {
             @Override
-            public ListenableFuture<Transaction> broadcastTransaction(Transaction tx) {
+            public TransactionBroadcast broadcastTransaction(Transaction tx) {
                 broadcastTxPause.acquireUninterruptibly();
                 SettableFuture<Transaction> future = SettableFuture.create();
                 future.set(tx);
                 broadcasts.add(tx);
-                return future;
+                return TransactionBroadcast.createMockBroadcast(tx, future);
             }
         };
 

@@ -1,5 +1,5 @@
 /**
- * Copyright 2013 The bitcoinj developers.
+ * Copyright 2014 The bitcoinj developers.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -163,6 +163,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         protected long seedCreationTimeSecs;
         protected byte[] entropy;
         protected DeterministicSeed seed;
+        protected DeterministicKey watchingKey;
 
         protected Builder() {
         }
@@ -215,6 +216,16 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
             return self();
         }
 
+        public T watchingKey(DeterministicKey watchingKey) {
+            this.watchingKey = watchingKey;
+            return self();
+        }
+
+        public T seedCreationTimeSecs(long seedCreationTimeSecs) {
+            this.seedCreationTimeSecs = seedCreationTimeSecs;
+            return self();
+        }
+
         /** The passphrase to use with the generated mnemonic, or null if you would like to use the default empty string. Currently must be the empty string. */
         public T passphrase(String passphrase) {
             // FIXME support non-empty passphrase
@@ -224,7 +235,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
 
 
         public DeterministicKeyChain build() {
-            checkState(random != null || entropy != null || seed != null, "Must provide either entropy or random");
+            checkState(random != null || entropy != null || seed != null || watchingKey!= null, "Must provide either entropy or random or seed or watchingKey");
             checkState(passphrase == null || seed == null, "Passphrase must not be specified with seed");
             DeterministicKeyChain chain;
 
@@ -233,8 +244,10 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                 chain = new DeterministicKeyChain(random, bits, getPassphrase(), seedCreationTimeSecs);
             } else if (entropy != null) {
                 chain = new DeterministicKeyChain(entropy, getPassphrase(), seedCreationTimeSecs);
-            } else {
+            } else if (seed != null) {
                 chain = new DeterministicKeyChain(seed);
+            } else {
+                chain = new DeterministicKeyChain(watchingKey, seedCreationTimeSecs);
             }
 
             return chain;
@@ -963,7 +976,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                 for (int i : key.getDeterministicKey().getPathList())
                     path.add(new ChildNumber(i));
                 // Deserialize the public key and path.
-                ECPoint pubkey = ECKey.CURVE.getCurve().decodePoint(key.getPublicKey().toByteArray());
+                LazyECPoint pubkey = new LazyECPoint(ECKey.CURVE.getCurve(), key.getPublicKey().toByteArray());
                 final ImmutableList<ChildNumber> immutablePath = ImmutableList.copyOf(path);
                 // Possibly create the chain, if we didn't already do so yet.
                 boolean isAccountKey = false;
@@ -1437,6 +1450,12 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         return keys;
     }
 
+    /**
+     * Returns only the keys that have been issued by this chain, lookahead not included.
+     */
+    public List<ECKey> getIssuedReceiveKeys() {
+        return getKeys(false);
+    }
 
     /**
      * Returns leaf keys issued by this chain (including lookahead zone)
@@ -1514,7 +1533,8 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                                 seed.toHexString())
                 );
             }
-            builder2.append(String.format("Seed birthday: %d  [%s]%n", seed.getCreationTimeSeconds(), new Date(seed.getCreationTimeSeconds() * 1000)));
+            builder2.append(String.format("Seed birthday: %d  [%s]%n", seed.getCreationTimeSeconds(),
+                    Utils.dateTimeFormat(seed.getCreationTimeSeconds() * 1000)));
         }
         final DeterministicKey watchingKey = getWatchingKey();
         // Don't show if it's been imported from a watching wallet already, because it'd result in a weird/

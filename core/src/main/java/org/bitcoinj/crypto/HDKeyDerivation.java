@@ -38,10 +38,19 @@ import static com.google.common.base.Preconditions.checkState;
  * deterministic wallet child key generation algorithm.
  */
 public final class HDKeyDerivation {
+
     private static final Logger log = LoggerFactory.getLogger(HDKeyDerivation.class);
 
+    static {
+        // Init proper random number generator, as some old Android installations have bugs that make it unsecure.
+        if (Utils.isAndroidRuntime())
+            new LinuxSecureRandom();
+
+        RAND_INT = new BigInteger(256, new SecureRandom());
+    }
+
     // Some arbitrary random number. Doesn't matter what it is.
-    private static final BigInteger RAND_INT = new BigInteger(256, new SecureRandom());
+    private static final BigInteger RAND_INT;
 
     private HDKeyDerivation() { }
 
@@ -147,7 +156,7 @@ public final class HDKeyDerivation {
    }
 
     public static DeterministicKey createMasterPubKeyFromBytes(byte[] pubKeyBytes, byte[] chainCode) {
-        return new DeterministicKey(ImmutableList.<ChildNumber>of(), chainCode, ECKey.CURVE.getCurve().decodePoint(pubKeyBytes), null, null);
+        return new DeterministicKey(ImmutableList.<ChildNumber>of(), chainCode, new LazyECPoint(ECKey.CURVE.getCurve(), pubKeyBytes), null, null);
     }
 
     /**
@@ -191,7 +200,7 @@ public final class HDKeyDerivation {
             return new DeterministicKey(
                     HDUtils.append(parent.getPath(), childNumber),
                     rawKey.chainCode,
-                    ECKey.CURVE.getCurve().decodePoint(rawKey.keyBytes),   // c'tor will compress
+                    new LazyECPoint(ECKey.CURVE.getCurve(), rawKey.keyBytes),
                     null,
                     parent);
         } else {

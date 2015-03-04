@@ -42,7 +42,7 @@ public class Address extends VersionedChecksummedBytes {
      */
     public static final int LENGTH = 20;
 
-    transient final NetworkParameters params;
+    private final NetworkParameters params;
 
     /**
      * Construct an address from parameters, the address version, and the hash160 form. Example:<p>
@@ -121,7 +121,7 @@ public class Address extends VersionedChecksummedBytes {
         return bytes;
     }
 
-    /*
+    /**
      * Returns true if this address is a Pay-To-Script-Hash (P2SH) address.
      * See also https://github.com/bitcoin/bips/blob/master/bip-0013.mediawiki: Address Format for pay-to-script-hash
      */
@@ -167,5 +167,13 @@ public class Address extends VersionedChecksummedBytes {
             }
         }
         return false;
+    }
+
+    /**
+     * This implementation narrows the return type to <code>Address</code>.
+     */
+    @Override
+    public Address clone() throws CloneNotSupportedException {
+        return (Address) super.clone();
     }
 }

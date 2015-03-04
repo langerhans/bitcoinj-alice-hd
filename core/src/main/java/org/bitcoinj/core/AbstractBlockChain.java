@@ -86,6 +86,7 @@ public abstract class AbstractBlockChain {
 
     /** Keeps a map of block hashes to StoredBlocks. */
     private final BlockStore blockStore;
+    private final Context context;
 
     /**
      * Tracks the top of the best known chain.<p>
@@ -149,6 +150,11 @@ public abstract class AbstractBlockChain {
         this.params = params;
         this.listeners = new CopyOnWriteArrayList<ListenerRegistration<BlockChainListener>>();
         for (BlockChainListener l : listeners) addListener(l, Threading.SAME_THREAD);
+        context = new Context();
+    }
+
+    public Context getContext() {
+        return context;
     }
 
     /**
@@ -344,24 +350,13 @@ public abstract class AbstractBlockChain {
      */
     protected abstract TransactionOutputChanges connectTransactions(StoredBlock newBlock) throws VerificationException, BlockStoreException, PrunedException;    
     
-    // Stat counters.
-    private long statsLastTime = System.currentTimeMillis();
-    private long statsBlocksAdded;
-
     // filteredTxHashList contains all transactions, filteredTxn just a subset
     private boolean add(Block block, boolean tryConnecting,
                         @Nullable List<Sha256Hash> filteredTxHashList, @Nullable Map<Sha256Hash, Transaction> filteredTxn)
             throws BlockStoreException, VerificationException, PrunedException {
+        // TODO: Use read/write locks to ensure that during chain download properties are still low latency.
         lock.lock();
         try {
-            // TODO: Use read/write locks to ensure that during chain download properties are still low latency.
-            if (System.currentTimeMillis() - statsLastTime > 1000) {
-                // More than a second passed since last stats logging.
-                if (statsBlocksAdded > 1)
-                    log.info("{} blocks per second", statsBlocksAdded);
-                statsLastTime = System.currentTimeMillis();
-                statsBlocksAdded = 0;
-            }
             // Quick check for duplicates to avoid an expensive check further down (in findSplit). This can happen a lot
             // when connecting orphan transactions due to the dumb brute force algorithm we use.
             if (block.equals(getChainHead().getHeader())) {
@@ -423,7 +418,6 @@ public abstract class AbstractBlockChain {
             if (tryConnecting)
                 tryConnectingOrphans();
 
-            statsBlocksAdded++;
             return true;
         } finally {
             lock.unlock();

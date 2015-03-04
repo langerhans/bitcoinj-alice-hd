@@ -89,7 +89,7 @@ public class Peer extends PeerSocketHandler {
     private final AtomicInteger blocksAnnounced = new AtomicInteger();
     // A class that tracks recent transactions that have been broadcast across the network, counts how many
     // peers announced them and updates the transaction confidence data. It is passed to each Peer.
-    private final MemoryPool memoryPool;
+    @Nullable private final TxConfidenceTable confidenceTable;
     // Each wallet added to the peer will be notified of downloaded transaction data.
     private final CopyOnWriteArrayList<Wallet> wallets;
     // A time before which we only download block headers, after that point we download block bodies.
@@ -132,6 +132,7 @@ public class Peer extends PeerSocketHandler {
         SettableFuture future;
     }
     private final CopyOnWriteArrayList<GetDataRequest> getDataFutures;
+    @GuardedBy("getAddrFutures") private final LinkedList<SettableFuture<AddressMessage>> getAddrFutures;
 
     // Outstanding pings against this peer and how long the last one took to complete.
     private final ReentrantLock lastPingTimesLock = new ReentrantLock();
@@ -161,12 +162,12 @@ public class Peer extends PeerSocketHandler {
      * used to keep track of which peers relayed transactions and offer more descriptive logging.</p>
      */
     public Peer(NetworkParameters params, VersionMessage ver, @Nullable AbstractBlockChain chain, PeerAddress remoteAddress) {
-        this(params, ver, remoteAddress, chain, null);
+        this(params, ver, remoteAddress, chain);
     }
 
     /**
-     * <p>Construct a peer that reads/writes from the given block chain and memory pool. Transactions stored in a memory
-     * pool will have their confidence levels updated when a peer announces it, to reflect the greater likelyhood that
+     * <p>Construct a peer that reads/writes from the given block chain. Transactions stored in a {@link org.bitcoinj.core.TxConfidenceTable}
+     * will have their confidence levels updated when a peer announces it, to reflect the greater likelyhood that
      * the transaction is valid.</p>
      *
      * <p>Note that this does <b>NOT</b> make a connection to the given remoteAddress, it only creates a handler for a
@@ -179,13 +180,13 @@ public class Peer extends PeerSocketHandler {
      * used to keep track of which peers relayed transactions and offer more descriptive logging.</p>
      */
     public Peer(NetworkParameters params, VersionMessage ver, PeerAddress remoteAddress,
-                @Nullable AbstractBlockChain chain, @Nullable MemoryPool mempool) {
-        this(params, ver, remoteAddress, chain, mempool, true);
+                @Nullable AbstractBlockChain chain) {
+        this(params, ver, remoteAddress, chain, true);
     }
 
     /**
-     * <p>Construct a peer that reads/writes from the given block chain and memory pool. Transactions stored in a memory
-     * pool will have their confidence levels updated when a peer announces it, to reflect the greater likelyhood that
+     * <p>Construct a peer that reads/writes from the given block chain. Transactions stored in a {@link org.bitcoinj.core.TxConfidenceTable}
+     * will have their confidence levels updated when a peer announces it, to reflect the greater likelyhood that
      * the transaction is valid.</p>
      *
      * <p>Note that this does <b>NOT</b> make a connection to the given remoteAddress, it only creates a handler for a
@@ -198,20 +199,21 @@ public class Peer extends PeerSocketHandler {
      * used to keep track of which peers relayed transactions and offer more descriptive logging.</p>
      */
     public Peer(NetworkParameters params, VersionMessage ver, PeerAddress remoteAddress,
-                @Nullable AbstractBlockChain chain, @Nullable MemoryPool mempool, boolean downloadTxDependencies) {
+                @Nullable AbstractBlockChain chain, boolean downloadTxDependencies) {
         super(params, remoteAddress);
         this.params = Preconditions.checkNotNull(params);
         this.versionMessage = Preconditions.checkNotNull(ver);
-        this.vDownloadTxDependencies = downloadTxDependencies;
+        this.vDownloadTxDependencies = chain != null && downloadTxDependencies;
         this.blockChain = chain;  // Allowed to be null.
         this.vDownloadData = chain != null;
         this.getDataFutures = new CopyOnWriteArrayList<GetDataRequest>();
         this.eventListeners = new CopyOnWriteArrayList<PeerListenerRegistration>();
+        this.getAddrFutures = new LinkedList<SettableFuture<AddressMessage>>();
         this.fastCatchupTimeSecs = params.getGenesisBlock().getTimeSeconds();
         this.isAcked = false;
         this.pendingPings = new CopyOnWriteArrayList<PendingPing>();
         this.wallets = new CopyOnWriteArrayList<Wallet>();
-        this.memoryPool = mempool;
+        this.confidenceTable = chain != null ? chain.getContext().getConfidenceTable() : null;
     }
 
     /**
@@ -271,6 +273,14 @@ public class Peer extends PeerSocketHandler {
             return "Peer()";
         } else {
             return addr.toString();
+        }
+    }
+
+    @Override
+    protected void timeoutOccurred() {
+        super.timeoutOccurred();
+        if (!connectionOpenFuture.isDone()) {
+            connectionClosed();  // Invoke the event handlers to tell listeners e.g. PeerGroup that we never managed to connect.
         }
     }
 
@@ -355,6 +365,7 @@ public class Peer extends PeerSocketHandler {
             // We don't care about addresses of the network right now. But in future,
             // we should save them in the wallet so we don't put too much load on the seed nodes and can
             // properly explore the network.
+            processAddressMessage((AddressMessage) m);
         } else if (m instanceof HeadersMessage) {
             processHeaders((HeadersMessage) m);
         } else if (m instanceof AlertMessage) {
@@ -393,10 +404,20 @@ public class Peer extends PeerSocketHandler {
                 future.set((UTXOsMessage)m);
             }
         } else if (m instanceof RejectMessage) {
-            log.error("Received Message {}", m);
+            log.error("{} {}: Received {}", this, getPeerVersionMessage().subVer, m);
         } else {
-            log.warn("Received unhandled message: {}", m);
+            log.warn("{}: Received unhandled message: {}", this, m);
         }
+    }
+
+    private void processAddressMessage(AddressMessage m) {
+        SettableFuture<AddressMessage> future;
+        synchronized (getAddrFutures) {
+            future = getAddrFutures.poll();
+            if (future == null)  // Not an addr message we are waiting for.
+                return;
+        }
+        future.set(m);
     }
 
     private void processVersionMessage(VersionMessage m) throws ProtocolException {
@@ -518,7 +539,7 @@ public class Peer extends PeerSocketHandler {
                     }
                     if (blockChain.add(header)) {
                         // The block was successfully linked into the chain. Notify the user of our progress.
-                        invokeOnBlocksDownloaded(header);
+                        invokeOnBlocksDownloaded(header, null);
                     } else {
                         // This block is unconnected - we don't know how to get from it back to the genesis block yet.
                         // That must mean that the peer is buggy or malicious because we specifically requested for
@@ -583,9 +604,9 @@ public class Peer extends PeerSocketHandler {
         lock.lock();
         try {
             log.debug("{}: Received tx {}", getAddress(), tx.getHashAsString());
-            if (memoryPool != null) {
+            if (confidenceTable != null) {
                 // We may get back a different transaction object.
-                tx = memoryPool.seen(tx, getAddress());
+                tx = confidenceTable.seen(tx, getAddress());
             }
             fTx = tx;
             // Label the transaction as coming in from the P2P network (as opposed to being created by us, direct import,
@@ -686,7 +707,7 @@ public class Peer extends PeerSocketHandler {
      * <p>Note that dependencies downloaded this way will not trigger the onTransaction method of event listeners.</p>
      */
     public ListenableFuture<List<Transaction>> downloadDependencies(Transaction tx) {
-        checkNotNull(memoryPool, "Must have a configured MemoryPool object to download dependencies.");
+        checkNotNull(confidenceTable, "Must have a configured TxConfidenceTable object to download dependencies.");
         TransactionConfidence.ConfidenceType txConfidence = tx.getConfidence().getConfidenceType();
         Preconditions.checkArgument(txConfidence != TransactionConfidence.ConfidenceType.BUILDING);
         log.info("{}: Downloading dependencies of {}", getAddress(), tx.getHashAsString());
@@ -712,7 +733,7 @@ public class Peer extends PeerSocketHandler {
     private ListenableFuture<Object> downloadDependenciesInternal(final Transaction tx,
                                                                   final Object marker,
                                                                   final List<Transaction> results) {
-        checkNotNull(memoryPool, "Must have a configured MemoryPool object to download dependencies.");
+        checkNotNull(confidenceTable, "Must have a configured TxConfidenceTable object to download dependencies.");
         final SettableFuture<Object> resultFuture = SettableFuture.create();
         final Sha256Hash rootTxHash = tx.getHash();
         // We want to recursively grab its dependencies. This is so listeners can learn important information like
@@ -727,7 +748,7 @@ public class Peer extends PeerSocketHandler {
         for (TransactionInput input : tx.getInputs()) {
             // There may be multiple inputs that connect to the same transaction.
             Sha256Hash hash = input.getOutpoint().getHash();
-            Transaction dep = memoryPool.get(hash);
+            Transaction dep = confidenceTable.get(hash);
             if (dep == null) {
                 needToRequest.add(hash);
             } else {
@@ -825,7 +846,7 @@ public class Peer extends PeerSocketHandler {
             // Otherwise it's a block sent to us because the peer thought we needed it, so add it to the block chain.
             if (blockChain.add(m)) {
                 // The block was successfully linked into the chain. Notify the user of our progress.
-                invokeOnBlocksDownloaded(m);
+                invokeOnBlocksDownloaded(m, null);
             } else {
                 // This block is an orphan - we don't know how to get from it back to the genesis block yet. That
                 // must mean that there are blocks we are missing, so do another getblocks with a new block locator
@@ -929,7 +950,7 @@ public class Peer extends PeerSocketHandler {
 
             if (blockChain.add(m)) {
                 // The block was successfully linked into the chain. Notify the user of our progress.
-                invokeOnBlocksDownloaded(m.getBlockHeader());
+                invokeOnBlocksDownloaded(m.getBlockHeader(), m);
             } else {
                 // This block is an orphan - we don't know how to get from it back to the genesis block yet. That
                 // must mean that there are blocks we are missing, so do another getblocks with a new block locator
@@ -987,7 +1008,7 @@ public class Peer extends PeerSocketHandler {
         return found;
     }
 
-    private void invokeOnBlocksDownloaded(final Block m) {
+    private void invokeOnBlocksDownloaded(final Block block, @Nullable final FilteredBlock fb) {
         // It is possible for the peer block height difference to be negative when blocks have been solved and broadcast
         // since the time we first connected to the peer. However, it's weird and unexpected to receive a callback
         // with negative "blocks left" in this case, so we clamp to zero so the API user doesn't have to think about it.
@@ -996,7 +1017,7 @@ public class Peer extends PeerSocketHandler {
             registration.executor.execute(new Runnable() {
                 @Override
                 public void run() {
-                    registration.listener.onBlocksDownloaded(Peer.this, m, blocksLeft);
+                    registration.listener.onBlocksDownloaded(Peer.this, block, fb, blocksLeft);
                 }
             });
         }
@@ -1043,7 +1064,7 @@ public class Peer extends PeerSocketHandler {
         Iterator<InventoryItem> it = transactions.iterator();
         while (it.hasNext()) {
             InventoryItem item = it.next();
-            if (memoryPool == null) {
+            if (confidenceTable == null) {
                 if (downloadData) {
                     // If there's no memory pool only download transactions if we're configured to.
                     getdata.addItem(item);
@@ -1055,7 +1076,7 @@ public class Peer extends PeerSocketHandler {
                 // peers run at different speeds. However to conserve bandwidth on mobile devices we try to only download a
                 // transaction once. This means we can miss broadcasts if the peer disconnects between sending us an inv and
                 // sending us the transaction: currently we'll never try to re-fetch after a timeout.
-                if (memoryPool.maybeWasSeen(item.hash)) {
+                if (confidenceTable.maybeWasSeen(item.hash)) {
                     // Some other peer already announced this so don't download.
                     it.remove();
                 } else {
@@ -1063,7 +1084,7 @@ public class Peer extends PeerSocketHandler {
                     getdata.addItem(item);
                 }
                 // This can trigger transaction confidence listeners.
-                memoryPool.seen(item.hash, this.getAddress());
+                confidenceTable.seen(item.hash, this.getAddress());
             }
         }
 
@@ -1171,6 +1192,16 @@ public class Peer extends PeerSocketHandler {
         getDataFutures.add(req);
         sendMessage(getdata);
         return req.future;
+    }
+
+    /** Sends a getaddr request to the peer and returns a future that completes with the answer once the peer has replied. */
+    public ListenableFuture<AddressMessage> getAddr() {
+        SettableFuture<AddressMessage> future = SettableFuture.create();
+        synchronized (getAddrFutures) {
+            getAddrFutures.add(future);
+        }
+        sendMessage(new GetAddrMessage(params));
+        return future;
     }
 
     /**
@@ -1528,7 +1559,7 @@ public class Peer extends PeerSocketHandler {
      * unset a filter, though the underlying p2p protocol does support it.</p>
      */
     public void setBloomFilter(BloomFilter filter) {
-        setBloomFilter(filter, memoryPool != null || vDownloadData);
+        setBloomFilter(filter, confidenceTable != null || vDownloadData);
     }
 
     /**
