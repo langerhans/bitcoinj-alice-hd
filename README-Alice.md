@@ -27,7 +27,24 @@ Alice tracks the upstream Bitcoinj as closely as possible so the patching proces
 
 `git checkout master`
 
-MERGE PROCEDURE
+
+5. Checkout the alice develop branch
+`git checkout develop`
+or
+`git checkout -b develop` # to create
+
+6. Merge in the bitcoinj-canonical/master (which is their 'current development' branch)
+`git merge bitcoinj-canonical/master`
+
+7. Keep a list of ALL files that are changed.
+   Fix merge errors. Run all the Junit tests. Check that MBHD develop branch works with the alice develop snapshot.
+
+8.a Once all changes are acceptable, merge alice develop into alice master.
+`git checkout master`
+'git merge develop`
+
+
+ALTERNATE MERGE PROCEDURE
 #5. Rewrite `master` so that any commits of yours that aren't already in `bitcoinj-canonical/master` are replayed over the bitcoinj-canonical changes:
 #
 #`git rebase bitcoinj-canonical/master`
@@ -35,19 +52,3 @@ MERGE PROCEDURE
 #6. Force push your local changes up to `origin/master`
 #
 #`git push -f origin master`
-
-Alternatively:
-5.a Checkout the alice develop branch
-`git checkout develop`
-or
-`git checkout -b develop` # to create
-
-6.a Merge in the bitcoinj-canonical/master (which is their 'current development' branch)
-`git merge bitcoinj-canonical/master`
-
-7.a Keep a list of ALL files that are changed as each need checking manually that functionality is acceptable
-    Fix merge errors. Run all the Junit tests. Check that MBHD develop branch works with the alice develop snapshot.
-
-8.a Once all changes are acceptable, merge alice develop into alice master.
-`git checkout master`
-'git merge develop`
