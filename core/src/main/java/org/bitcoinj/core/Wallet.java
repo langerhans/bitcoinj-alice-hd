@@ -3517,7 +3517,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
     public void completeTx(SendRequest req) throws InsufficientMoneyException {
         lock.lock();
         try {
-            checkArgument(!req.completed, "Given SendRequest has already been completed.");
+            // ALICE - allow a send request to be completed twice - used in Empty wallet
             // Calculate the amount of value we need to import.
             Coin value = Coin.ZERO;
             for (TransactionOutput output : req.tx.getOutputs()) {
