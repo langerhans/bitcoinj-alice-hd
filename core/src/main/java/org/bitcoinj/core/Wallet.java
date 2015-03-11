@@ -4812,4 +4812,5 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
         }
     }
     //endregion
+  
 }
