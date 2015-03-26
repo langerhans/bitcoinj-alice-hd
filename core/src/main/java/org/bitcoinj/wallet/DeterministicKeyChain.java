@@ -903,10 +903,11 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
             if (entries.isEmpty() && isFollowing()) {
                 detKey.setIsFollowing(true);
             }
-            if (key.getParent() != null) {
-                // HD keys inherit the timestamp of their parent if they have one, so no need to serialize it.
-                proto.clearCreationTimestamp();
-            }
+            // ALICE - keep all timestamps
+//            if (key.getParent() != null) {
+//                // HD keys inherit the timestamp of their parent if they have one, so no need to serialize it.
+//                proto.clearCreationTimestamp();
+//            }
             entries.add(proto.build());
         }
         return entries;
@@ -941,6 +942,8 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                     chain = null;
                 }
                 long timestamp = key.getCreationTimestamp() / 1000;
+                log.debug("DETERMINISTIC_MNEMONIC timestamp:{}", new Date(timestamp * 1000));
+
                 String passphrase = DEFAULT_PASSPHRASE_FOR_MNEMONIC; // FIXME allow non-empty passphrase
                 if (key.hasSecretBytes()) {
                     if (key.hasEncryptedDeterministicSeed())
