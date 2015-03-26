@@ -646,6 +646,12 @@ public class KeyChainGroup implements KeyBag {
         return time;
     }
 
+  public void setEarliestKeyCreationTime(long earliestKeyCreationTimeSeconds) {
+        for (DeterministicKeyChain chain : chains) {
+          chain.setEarliestKeyCreationTime(earliestKeyCreationTimeSeconds);
+        }
+    }
+
     public int getBloomFilterElementCount() {
         int result = basic.numBloomFilterEntries();
         for (DeterministicKeyChain chain : chains) {

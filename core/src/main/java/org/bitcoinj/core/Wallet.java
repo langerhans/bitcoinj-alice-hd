@@ -2795,6 +2795,18 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
         }
     }
 
+  /**
+   * Set the key creation time
+   * @param keyCreationTimeSeconds the key creation time in seconds
+   */
+  public void setEarliestKeyCreationTime(long keyCreationTimeSeconds) {
+          keychainLock.lock();
+          try {
+              keychain.setEarliestKeyCreationTime(keyCreationTimeSeconds);
+          } finally {
+              keychainLock.unlock();
+          }
+      }
     /** Returns the hash of the last seen best-chain block, or null if the wallet is too old to store this data. */
     @Nullable
     public Sha256Hash getLastBlockSeenHash() {

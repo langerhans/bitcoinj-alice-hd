@@ -816,6 +816,13 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         return seed != null ? seed.getCreationTimeSeconds() : creationTimeSeconds;
     }
 
+    public void setEarliestKeyCreationTime(long earliestKeyCreationTimeSeconds) {
+      creationTimeSeconds = earliestKeyCreationTimeSeconds;
+      if (seed != null) {
+        seed.setCreationTimeSeconds(earliestKeyCreationTimeSeconds);
+      }
+    }
+
     @Override
     public void addEventListener(KeyChainEventListener listener) {
         basicKeyChain.addEventListener(listener);
