@@ -1068,8 +1068,22 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                         detkey = new DeterministicKey(immutablePath, chainCode, pubkey, null, parent);
                     }
                 }
-                if (key.hasCreationTimestamp())
-                    detkey.setCreationTimeSeconds(key.getCreationTimestamp() / 1000);
+                if (key.hasCreationTimestamp()) {
+                  detkey.setCreationTimeSeconds(key.getCreationTimestamp() / 1000);
+
+                  // ALICE - update earliest key creation time for DKC
+                  if (chain != null) {
+                    long loopKeyCreationTimeSeconds = key.getCreationTimestamp() / 1000;
+                    if (chain.creationTimeSeconds == 0) {
+                      chain.creationTimeSeconds = loopKeyCreationTimeSeconds;
+                    } else {
+                      if (chain.creationTimeSeconds > loopKeyCreationTimeSeconds) {
+                        // This key is earlier
+                        chain.creationTimeSeconds = loopKeyCreationTimeSeconds;
+                      }
+                    }
+                  }
+                }
                 if (log.isDebugEnabled())
                     log.debug("Deserializing: DETERMINISTIC_KEY: {}", detkey);
 
@@ -1117,7 +1131,8 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
             }
         }
         if (chain != null) {
-            log.debug("c lookaheadSize = " + lookaheadSize);
+            log.debug("chain creationTimeSeconds = {}", chain.creationTimeSeconds);
+            log.debug("chain lookaheadSize = {}", lookaheadSize);
             checkState(lookaheadSize >= 0);
             chain.setLookaheadSize(lookaheadSize);
             chain.setSigsRequiredToSpend(sigsRequiredToSpend);
