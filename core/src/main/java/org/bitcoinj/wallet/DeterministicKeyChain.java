@@ -1074,12 +1074,14 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                   // ALICE - update earliest key creation time for DKC
                   if (chain != null) {
                     long loopKeyCreationTimeSeconds = key.getCreationTimestamp() / 1000;
-                    if (chain.creationTimeSeconds == 0) {
-                      chain.creationTimeSeconds = loopKeyCreationTimeSeconds;
-                    } else {
-                      if (chain.creationTimeSeconds > loopKeyCreationTimeSeconds) {
-                        // This key is earlier
+                    if (loopKeyCreationTimeSeconds != 0) {
+                      if (chain.creationTimeSeconds == 0) {
                         chain.creationTimeSeconds = loopKeyCreationTimeSeconds;
+                      } else {
+                        if (chain.creationTimeSeconds > loopKeyCreationTimeSeconds) {
+                          // This key is earlier
+                          chain.creationTimeSeconds = loopKeyCreationTimeSeconds;
+                        }
                       }
                     }
                   }
