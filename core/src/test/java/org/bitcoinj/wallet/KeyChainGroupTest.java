@@ -427,8 +427,14 @@ public class KeyChainGroupTest {
         assertEquals(INITIAL_KEYS + ((LOOKAHEAD_SIZE + 2)  * 2)  + 1 /* for the seed */ + 1, protoKeys1.size());
         assertTrue(group.hasKey(key1));
         assertTrue(group.hasKey(key2));
-        assertEquals(key2, group.currentKey(KeyChain.KeyPurpose.CHANGE));
-        assertEquals(key1, group.currentKey(KeyChain.KeyPurpose.RECEIVE_FUNDS));
+        // Reborn keys have a birthdate - do not compare these
+        DeterministicKey key1reborn = group.currentKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
+        key1reborn.setCreationTimeSeconds(0);
+        DeterministicKey key2reborn = group.currentKey(KeyChain.KeyPurpose.CHANGE);
+        key2reborn.setCreationTimeSeconds(0);
+
+        assertEquals(key2, key2reborn);
+        assertEquals(key1, key1reborn);
         group = KeyChainGroup.fromProtobufUnencrypted(params, protoKeys2);
         assertEquals(INITIAL_KEYS + ((LOOKAHEAD_SIZE + 2) * 2) + 1 /* for the seed */ + 2, protoKeys2.size());
         assertTrue(group.hasKey(key1));

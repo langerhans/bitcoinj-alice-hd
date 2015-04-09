@@ -185,10 +185,21 @@ public class DeterministicKeyChainTest {
         chain = DeterministicKeyChain.fromProtobuf(keys, null).get(0);
         // ALICE
         // assertEquals(EXPECTED_SERIALIZATION, protoToString(chain.serializeToProtobuf()));
-        assertEquals(key1, chain.findKeyFromPubHash(key1.getPubKeyHash()));
-        assertEquals(key2, chain.findKeyFromPubHash(key2.getPubKeyHash()));
-        assertEquals(key3, chain.findKeyFromPubHash(key3.getPubKeyHash()));
-        assertEquals(key4, chain.getKey(KeyChain.KeyPurpose.CHANGE));
+
+        // Reborn keys have a birthdate - do not compare these
+        DeterministicKey key1reborn = chain.findKeyFromPubHash(key1.getPubKeyHash());
+        DeterministicKey key2reborn = chain.findKeyFromPubHash(key2.getPubKeyHash());
+        DeterministicKey key3reborn = chain.findKeyFromPubHash(key3.getPubKeyHash());
+        DeterministicKey key4reborn = chain.getKey(KeyChain.KeyPurpose.CHANGE);
+        key1reborn.setCreationTimeSeconds(0);
+        key2reborn.setCreationTimeSeconds(0);
+        key3reborn.setCreationTimeSeconds(0);
+        key4reborn.setCreationTimeSeconds(0);
+
+        assertEquals(key1, key1reborn);
+        assertEquals(key2, key2reborn);
+        assertEquals(key3, key3reborn);
+        assertEquals(key4, key4reborn);
         key1.sign(Sha256Hash.ZERO_HASH);
         key2.sign(Sha256Hash.ZERO_HASH);
         key3.sign(Sha256Hash.ZERO_HASH);
