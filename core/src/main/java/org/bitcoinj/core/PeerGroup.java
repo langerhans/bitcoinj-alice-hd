@@ -344,6 +344,11 @@ public class PeerGroup implements TransactionBroadcaster {
         peerEventListeners = new CopyOnWriteArrayList<ListenerRegistration<PeerEventListener>>();
         runningBroadcasts = Collections.synchronizedSet(new HashSet<TransactionBroadcast>());
         bloomFilterMerger = new FilterMerger(DEFAULT_BLOOM_FILTER_FP_RATE);
+
+        // Do not look for IP6 if system property set to prefer ip4
+        if (Boolean.TRUE.toString().equals(System.getProperty("java.net.preferIPv4Stack"))) {
+            ipv6Unreachable = true;
+        }
     }
 
     private CountDownLatch executorStartupLatch = new CountDownLatch(1);
