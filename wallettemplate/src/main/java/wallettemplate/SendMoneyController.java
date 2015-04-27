@@ -48,7 +48,11 @@ public class SendMoneyController {
         try {
             Coin amount = Coin.parseCoin(amountEdit.getText());
             Address destination = new Address(Main.params, address.getText());
-            Wallet.SendRequest req = Wallet.SendRequest.to(destination, amount);
+            Wallet.SendRequest req;
+            if (amount.equals(Main.bitcoin.wallet().getBalance()))
+                req = Wallet.SendRequest.emptyWallet(destination);
+            else
+                req = Wallet.SendRequest.to(destination, amount);
             req.aesKey = aesKey;
             sendResult = Main.bitcoin.wallet().sendCoins(req);
             Futures.addCallback(sendResult.broadcastComplete, new FutureCallback<Transaction>() {
@@ -88,6 +92,7 @@ public class SendMoneyController {
     private void askForPasswordAndRetry() {
         Main.OverlayUI<WalletPasswordController> pwd = Main.instance.overlayUI("wallet_password.fxml");
         final String addressStr = address.getText();
+        final String amountStr = amountEdit.getText();
         pwd.controller.aesKeyProperty().addListener((observable, old, cur) -> {
             // We only get here if the user found the right password. If they don't or they cancel, we end up back on
             // the main UI screen. By now the send money screen is history so we must recreate it.
@@ -95,6 +100,7 @@ public class SendMoneyController {
             Main.OverlayUI<SendMoneyController> screen = Main.instance.overlayUI("send_money.fxml");
             screen.controller.aesKey = cur;
             screen.controller.address.setText(addressStr);
+            screen.controller.amountEdit.setText(amountStr);
             screen.controller.send(null);
         });
     }

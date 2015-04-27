@@ -38,6 +38,8 @@ import java.util.*;
 import static org.bitcoinj.script.ScriptOpCodes.*;
 import static com.google.common.base.Preconditions.*;
 
+// TODO: Redesign this entire API to be more type safe and organised.
+
 /**
  * <p>Programs embedded inside transactions that control redemption of payments.</p>
  *
@@ -50,6 +52,15 @@ import static com.google.common.base.Preconditions.*;
  * static methods for building scripts.</p>
  */
 public class Script {
+
+    /** Enumeration to encapsulate the type of this script. */
+    public enum ScriptType {
+        // Do NOT change the ordering of the following definitions because their ordinals are stored in databases.
+        NO_TYPE,
+        P2PKH,
+        PUB_KEY,
+        P2SH
+    };
 
     /** Flags to pass to {@link Script#correctlySpends(Transaction, long, Script, Set)}. */
     public enum VerifyFlag {
@@ -92,7 +103,7 @@ public class Script {
     public Script(byte[] programBytes) throws ScriptException {
         program = programBytes;
         parse(programBytes);
-        creationTimeSeconds = Utils.currentTimeSeconds();
+        creationTimeSeconds = 0;
     }
 
     public Script(byte[] programBytes, long creationTimeSeconds) throws ScriptException {
@@ -243,10 +254,16 @@ public class Script {
     }
 
     /**
-     * If a program matches the standard template DUP HASH160 <pubkey hash> EQUALVERIFY CHECKSIG
-     * then this function retrieves the third element, otherwise it throws a ScriptException.<p>
+     * <p>If a program matches the standard template DUP HASH160 &lt;pubkey hash&gt; EQUALVERIFY CHECKSIG
+     * then this function retrieves the third element.
+     * In this case, this is useful for fetching the destination address of a transaction.</p>
+     * 
+     * <p>If a program matches the standard template HASH160 &lt;script hash&gt; EQUAL
+     * then this function retrieves the second element.
+     * In this case, this is useful for fetching the hash of the redeem script of a transaction.</p>
+     * 
+     * <p>Otherwise it throws a ScriptException.</p>
      *
-     * This is useful for fetching the destination address of a transaction.
      */
     public byte[] getPubKeyHash() throws ScriptException {
         if (isSentToAddress())
@@ -463,6 +480,22 @@ public class Script {
         }
 
         throw new IllegalStateException("Could not find matching key " + key.toString() + " in script " + this);
+    }
+
+    /**
+     * Returns a list of the keys required by this script, assuming a multi-sig script.
+     *
+     * @throws ScriptException if the script type is not understood or is pay to address or is P2SH (run this method on the "Redeem script" instead).
+     */
+    public List<ECKey> getPubKeys() {
+        if (!isSentToMultiSig())
+            throw new ScriptException("Only usable for multisig scripts.");
+
+        ArrayList<ECKey> result = Lists.newArrayList();
+        int numKeys = Script.decodeFromOpN(chunks.get(chunks.size() - 2).opcode);
+        for (int i = 0 ; i < numKeys ; i++)
+            result.add(ECKey.fromPublicOnly(chunks.get(1 + i).data));
+        return result;
     }
 
     private int findSigInRedeem(byte[] signatureBytes, Sha256Hash hash) {
@@ -1450,6 +1483,22 @@ public class Script {
         if (program != null)
             return program;
         return getProgram();
+    }
+
+    /**
+     * Get the {@link org.bitcoinj.script.Script.ScriptType}.
+     * @return The script type.
+     */
+    public ScriptType getScriptType() {
+        ScriptType type = ScriptType.NO_TYPE;
+        if (isSentToAddress()) {
+            type = ScriptType.P2PKH;
+        } else if (isSentToRawPubKey()) {
+            type = ScriptType.PUB_KEY;
+        } else if (isPayToScriptHash()) {
+            type = ScriptType.P2SH;
+        }
+        return type;
     }
 
     @Override

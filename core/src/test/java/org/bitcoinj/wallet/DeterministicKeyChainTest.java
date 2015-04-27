@@ -28,6 +28,7 @@ import org.bitcoinj.params.MainNetParams;
 import org.bitcoinj.params.UnitTestParams;
 import org.bitcoinj.store.UnreadableWalletException;
 import org.bitcoinj.utils.Threading;
+
 import org.junit.Before;
 import org.junit.Test;
 import org.slf4j.Logger;
@@ -45,7 +46,7 @@ public class DeterministicKeyChainTest {
     private static final Logger log = LoggerFactory.getLogger(DeterministicKeyChainTest.class);
 
     private DeterministicKeyChain chain;
-    private final byte[] ENTROPY = Sha256Hash.create("don't use a string seed like this in real life".getBytes()).getBytes();
+    private final byte[] ENTROPY = Sha256Hash.hash("don't use a string seed like this in real life".getBytes()).getBytes();
 
     private static final String TREZOR_SEED_PHRASE = "sniff divert demise scrub pony motor struggle innocent model mask enroll settle cash junior denial harsh peasant update estate aspect lyrics season empower asset";
 
@@ -83,7 +84,9 @@ public class DeterministicKeyChainTest {
     @Test
     public void derive() throws Exception {
         ECKey key1 = chain.getKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
+        assertFalse(key1.isPubKeyOnly());
         ECKey key2 = chain.getKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
+        assertFalse(key2.isPubKeyOnly());
 
         final Address address = new Address(UnitTestParams.get(), "n1bQNoEx8uhmCzzA5JPG6sFdtsUQhwiQJV");
         assertEquals(address, key1.toAddress(UnitTestParams.get()));
@@ -92,10 +95,13 @@ public class DeterministicKeyChainTest {
         assertEquals(key2, chain.findKeyFromPubKey(key2.getPubKey()));
 
         key1.sign(Sha256Hash.ZERO_HASH);
+        assertFalse(key1.isPubKeyOnly());
 
         ECKey key3 = chain.getKey(KeyChain.KeyPurpose.CHANGE);
+        assertFalse(key3.isPubKeyOnly());
         assertEquals("mqumHgVDqNzuXNrszBmi7A2UpmwaPMx4HQ", key3.toAddress(UnitTestParams.get()).toString());
         key3.sign(Sha256Hash.ZERO_HASH);
+        assertFalse(key3.isPubKeyOnly());
     }
 
     @Test
@@ -360,7 +366,7 @@ public class DeterministicKeyChainTest {
 
         ImmutableList<ChildNumber> key_m_44h_0h_0h_path = key_m_44h_0h_0h.getPath();
 
-        DeterministicKey key_m_44h_0h_0h_pubOnly = key_m_44h_0h_0h.getPubOnly();
+        DeterministicKey key_m_44h_0h_0h_pubOnly = key_m_44h_0h_0h.dropPrivateBytes();
 
         // Generate a chain using the pubkey only of the root node
         DeterministicKeyChain accountChain = new DeterministicKeyChain(key_m_44h_0h_0h_pubOnly, key_m_44h_0h_0h_pubOnly.getCreationTimeSeconds(), key_m_44h_0h_0h_path);
@@ -396,7 +402,7 @@ public class DeterministicKeyChainTest {
     @Test(expected = IllegalStateException.class)
     public void watchingCannotEncrypt() throws Exception {
         final DeterministicKey accountKey = chain.getKeyByPath(DeterministicKeyChain.ACCOUNT_ZERO_PATH);
-        chain = DeterministicKeyChain.watch(accountKey.getPubOnly());
+        chain = DeterministicKeyChain.watch(accountKey.dropPrivateBytes().dropParent());
         chain = chain.toEncrypted("this doesn't make any sense");
     }
 
@@ -426,7 +432,7 @@ public class DeterministicKeyChainTest {
         DeterministicKey[] keys = new DeterministicKey[100];
         for (int i = 0; i < keys.length; i++)
             keys[i] = chain.getKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
-        chain = DeterministicKeyChain.watch(chain.getWatchingKey());
+        chain = DeterministicKeyChain.watch(chain.getWatchingKey().dropPrivateBytes().dropParent());
         int e = chain.numBloomFilterEntries();
         BloomFilter filter = chain.getFilter(e, 0.001, 1);
         for (DeterministicKey key : keys)

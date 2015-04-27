@@ -32,8 +32,6 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 import java.io.*;
-import java.text.ParseException;
-import java.text.SimpleDateFormat;
 import java.util.*;
 
 import static org.bitcoinj.core.Utils.*;
@@ -118,7 +116,7 @@ public class Transaction extends ChildMessage implements Serializable {
     private transient Sha256Hash hash;
 
     // Data about how confirmed this tx is. Serialized, may be null. 
-    private TransactionConfidence confidence;
+    @Nullable private TransactionConfidence confidence;
 
     // Records a map of which blocks the transaction has appeared in (keys) to an index within that block (values).
     // The "index" is not a real index, instead the values are only meaningful relative to each other. For example,
@@ -378,11 +376,23 @@ public class Transaction extends ChildMessage implements Serializable {
         return v;
     }
 
+    @Nullable private Coin cachedValue;
+    @Nullable private TransactionBag cachedForBag;
+
     /**
      * Returns the difference of {@link Transaction#getValueSentToMe(TransactionBag)} and {@link Transaction#getValueSentFromMe(TransactionBag)}.
      */
     public Coin getValue(TransactionBag wallet) throws ScriptException {
-        return getValueSentToMe(wallet).subtract(getValueSentFromMe(wallet));
+        // FIXME: TEMP PERF HACK FOR ANDROID - this crap can go away once we have a real payments API.
+        boolean isAndroid = Utils.isAndroidRuntime();
+        if (isAndroid && cachedValue != null && cachedForBag == wallet)
+            return cachedValue;
+        Coin result = getValueSentToMe(wallet).subtract(getValueSentFromMe(wallet));
+        if (isAndroid) {
+            cachedValue = result;
+            cachedForBag = wallet;
+        }
+        return result;
     }
 
     /**
@@ -402,27 +412,6 @@ public class Transaction extends ChildMessage implements Serializable {
             fee = fee.subtract(output.getValue());
         }
         return fee;
-    }
-
-    boolean disconnectInputs() {
-        boolean disconnected = false;
-        maybeParse();
-        for (TransactionInput input : inputs) {
-            disconnected |= input.disconnect();
-        }
-        return disconnected;
-    }
-
-    /**
-     * Returns true if every output is marked as spent.
-     */
-    public boolean isEveryOutputSpent() {
-        maybeParse();
-        for (TransactionOutput output : outputs) {
-            if (output.isAvailableForSpending())
-                return false;
-        }
-        return true;
     }
 
     /**
@@ -676,8 +665,11 @@ public class Transaction extends ChildMessage implements Serializable {
                 s.append(outpoint.toString());
                 final TransactionOutput connectedOutput = outpoint.getConnectedOutput();
                 if (connectedOutput != null) {
-                    s.append(" hash160:");
-                    s.append(Utils.HEX.encode(connectedOutput.getScriptPubKey().getPubKeyHash()));
+                    Script scriptPubKey = connectedOutput.getScriptPubKey();
+                    if (scriptPubKey.isSentToAddress() || scriptPubKey.isPayToScriptHash()) {
+                        s.append(" hash160:");
+                        s.append(Utils.HEX.encode(scriptPubKey.getPubKeyHash()));
+                    }
                 }
             } catch (Exception e) {
                 s.append("[exception: ").append(e.getMessage()).append("]");
@@ -1066,7 +1058,18 @@ public class Transaction extends ChildMessage implements Serializable {
      */
     public void setLockTime(long lockTime) {
         unCache();
-        // TODO: Consider checking that at least one input has a non-final sequence number.
+        boolean seqNumSet = false;
+        for (TransactionInput input : inputs) {
+            if (input.getSequenceNumber() != TransactionInput.NO_SEQUENCE) {
+                seqNumSet = true;
+                break;
+            }
+        }
+        if (!seqNumSet || inputs.isEmpty()) {
+            // At least one input must have a non-default sequence number for lock times to have any effect.
+            // For instance one of them can be set to zero to make this feature work.
+            log.warn("You are setting the lock time on a transaction but none of the inputs have non-default sequence numbers. This will not do what you expect!");
+        }
         this.lockTime = lockTime;
     }
 
@@ -1116,27 +1119,46 @@ public class Transaction extends ChildMessage implements Serializable {
         Collections.shuffle(outputs);
     }
 
-    /** @return the given transaction: same as getInputs().get(index). */
-    public TransactionInput getInput(int index) {
+    /** Same as getInputs().get(index). */
+    public TransactionInput getInput(long index) {
         maybeParse();
-        return inputs.get(index);
+        return inputs.get((int)index);
     }
 
-    public TransactionOutput getOutput(int index) {
+    /** Same as getOutputs().get(index) */
+    public TransactionOutput getOutput(long index) {
         maybeParse();
-        return outputs.get(index);
+        return outputs.get((int)index);
     }
 
-    public synchronized TransactionConfidence getConfidence() {
-        if (confidence == null) {
-            confidence = new TransactionConfidence(this);
-        }
+    /**
+     * Returns the confidence object for this transaction from the {@link org.bitcoinj.core.TxConfidenceTable}
+     * referenced by the implicit {@link Context}.
+     */
+    public TransactionConfidence getConfidence() {
+        return getConfidence(Context.get());
+    }
+
+    /**
+     * Returns the confidence object for this transaction from the {@link org.bitcoinj.core.TxConfidenceTable}
+     * referenced by the given {@link Context}.
+     */
+    public TransactionConfidence getConfidence(Context context) {
+        return getConfidence(context.getConfidenceTable());
+    }
+
+    /**
+     * Returns the confidence object for this transaction from the {@link org.bitcoinj.core.TxConfidenceTable}
+     */
+    public TransactionConfidence getConfidence(TxConfidenceTable table) {
+        if (confidence == null)
+            confidence = table.getOrCreate(getHash()) ;
         return confidence;
     }
 
     /** Check if the transaction has a known confidence */
-    public synchronized boolean hasConfidence() {
-        return confidence != null && confidence.getConfidenceType() != TransactionConfidence.ConfidenceType.UNKNOWN;
+    public boolean hasConfidence() {
+        return getConfidence().getConfidenceType() != TransactionConfidence.ConfidenceType.UNKNOWN;
     }
 
     @Override
@@ -1261,19 +1283,6 @@ public class Transaction extends ChildMessage implements Serializable {
         if (!isTimeLocked())
             return true;
         return false;
-    }
-
-    /**
-     * Parses the string either as a whole number of blocks, or if it contains slashes as a YYYY/MM/DD format date
-     * and returns the lock time in wire format.
-     */
-    public static long parseLockTimeStr(String lockTimeStr) throws ParseException {
-        if (lockTimeStr.indexOf("/") != -1) {
-            SimpleDateFormat format = new SimpleDateFormat("yyyy/MM/dd", Locale.US);
-            Date date = format.parse(lockTimeStr);
-            return date.getTime() / 1000;
-        }
-        return Long.parseLong(lockTimeStr);
     }
 
     /**

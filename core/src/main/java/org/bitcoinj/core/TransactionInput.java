@@ -60,7 +60,7 @@ public class TransactionInput extends ChildMessage implements Serializable {
     transient private WeakReference<Script> scriptSig;
     /** Value of the output connected to the input, if known. This field does not participate in equals()/hashCode(). */
     @Nullable
-    private final Coin value;
+    private Coin value;
 
     /**
      * Creates an input that connects to nothing - used only in creation of coinbase transactions.
@@ -91,7 +91,11 @@ public class TransactionInput extends ChildMessage implements Serializable {
     TransactionInput(NetworkParameters params, Transaction parentTransaction, TransactionOutput output) {
         super(params);
         long outputIndex = output.getIndex();
-        outpoint = new TransactionOutPoint(params, outputIndex, output.getParentTransaction());
+        if(output.getParentTransaction() != null ) {
+            outpoint = new TransactionOutPoint(params, outputIndex, output.getParentTransaction());
+        } else {
+            outpoint = new TransactionOutPoint(params, output);
+        }
         scriptBytes = EMPTY_ARRAY;
         sequence = NO_SEQUENCE;
         setParent(parentTransaction);
@@ -371,6 +375,7 @@ public class TransactionInput extends ChildMessage implements Serializable {
     public void connect(TransactionOutput out) {
         outpoint.fromTx = out.getParentTransaction();
         out.markAsSpent(this);
+        value = out.getValue();
     }
 
     /**

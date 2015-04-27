@@ -64,7 +64,7 @@ public class PaymentChannelStateTest extends TestWithWallet {
         super.setUp();
         wallet.addExtension(new StoredPaymentChannelClientStates(wallet, new TransactionBroadcaster() {
             @Override
-            public ListenableFuture<Transaction> broadcastTransaction(Transaction tx) {
+            public TransactionBroadcast broadcastTransaction(Transaction tx) {
                 fail();
                 return null;
             }
@@ -79,10 +79,10 @@ public class PaymentChannelStateTest extends TestWithWallet {
         broadcasts = new LinkedBlockingQueue<TxFuturePair>();
         mockBroadcaster = new TransactionBroadcaster() {
             @Override
-            public ListenableFuture<Transaction> broadcastTransaction(Transaction tx) {
+            public TransactionBroadcast broadcastTransaction(Transaction tx) {
                 SettableFuture<Transaction> future = SettableFuture.create();
                 broadcasts.add(new TxFuturePair(tx, future));
-                return future;
+                return TransactionBroadcast.createMockBroadcast(tx, future);
             }
         };
     }
@@ -292,7 +292,7 @@ public class PaymentChannelStateTest extends TestWithWallet {
         Utils.rollMockClock(60 * 60 * 2 + 60 * 5);
 
         // Now store the client state in a stored state object which handles the rebroadcasting
-        clientState.doStoreChannelInWallet(Sha256Hash.create(new byte[]{}));
+        clientState.doStoreChannelInWallet(Sha256Hash.hash(new byte[]{}));
         TxFuturePair clientBroadcastedMultiSig = broadcasts.take();
         TxFuturePair broadcastRefund = broadcasts.take();
         assertEquals(clientBroadcastedMultiSig.tx.getHash(), multisigContract.getHash());

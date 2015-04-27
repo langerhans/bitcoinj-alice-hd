@@ -25,11 +25,13 @@ import org.bitcoinj.crypto.MnemonicCode;
 import org.bitcoinj.params.MainNetParams;
 import org.bitcoinj.utils.BriefLogFormatter;
 import org.bitcoinj.utils.Threading;
+
 import org.junit.Before;
 import org.junit.Test;
 import org.spongycastle.crypto.params.KeyParameter;
 import org.spongycastle.util.Arrays;
 
+import java.math.BigInteger;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -66,7 +68,7 @@ public class KeyChainGroupTest {
     }
 
     private MarriedKeyChain createMarriedKeyChain() {
-        byte[] entropy = Sha256Hash.create("don't use a seed like this in real life".getBytes()).getBytes();
+        byte[] entropy = Sha256Hash.hash("don't use a seed like this in real life".getBytes()).getBytes();
         DeterministicSeed seed = new DeterministicSeed(entropy, "", MnemonicCode.BIP39_STANDARDISATION_TIME_SECS);
         MarriedKeyChain chain = MarriedKeyChain.builder()
                 .seed(seed)
@@ -587,5 +589,45 @@ public class KeyChainGroupTest {
         group.markPubKeyHashAsUsed(addr1.getHash160());
         Address addr3 = group.currentAddress(KeyChain.KeyPurpose.RECEIVE_FUNDS);
         assertNotEquals(addr2, addr3);
+    }
+
+    @Test
+    public void isNotWatching() {
+        group = new KeyChainGroup(params);
+        final ECKey key = ECKey.fromPrivate(BigInteger.TEN);
+        group.importKeys(key);
+        assertFalse(group.isWatching());
+    }
+
+    @Test
+    public void isWatching() {
+        group = new KeyChainGroup(
+                params,
+                DeterministicKey
+                        .deserializeB58(
+                                "xpub69bjfJ91ikC5ghsqsVDHNq2dRGaV2HHVx7Y9LXi27LN9BWWAXPTQr4u8U3wAtap8bLdHdkqPpAcZmhMS5SnrMQC4ccaoBccFhh315P4UYzo",
+                                params));
+        final ECKey watchingKey = ECKey.fromPublicOnly(new ECKey().getPubKeyPoint());
+        group.importKeys(watchingKey);
+        assertTrue(group.isWatching());
+    }
+
+    @Test(expected = IllegalStateException.class)
+    public void isWatchingNoKeys() {
+        group = new KeyChainGroup(params);
+        group.isWatching();
+    }
+
+    @Test(expected = IllegalStateException.class)
+    public void isWatchingMixedKeys() {
+        group = new KeyChainGroup(
+                params,
+                DeterministicKey
+                        .deserializeB58(
+                                "xpub69bjfJ91ikC5ghsqsVDHNq2dRGaV2HHVx7Y9LXi27LN9BWWAXPTQr4u8U3wAtap8bLdHdkqPpAcZmhMS5SnrMQC4ccaoBccFhh315P4UYzo",
+                                params));
+        final ECKey key = ECKey.fromPrivate(BigInteger.TEN);
+        group.importKeys(key);
+        group.isWatching();
     }
 }

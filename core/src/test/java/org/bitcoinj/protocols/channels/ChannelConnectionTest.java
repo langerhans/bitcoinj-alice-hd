@@ -50,7 +50,6 @@ import static org.junit.Assert.*;
 public class ChannelConnectionTest extends TestWithWallet {
     private static final int CLIENT_MAJOR_VERSION = 1;
     private Wallet serverWallet;
-    private BlockChain serverChain;
     private AtomicBoolean fail;
     private BlockingQueue<Transaction> broadcasts;
     private TransactionBroadcaster mockBroadcaster;
@@ -58,7 +57,7 @@ public class ChannelConnectionTest extends TestWithWallet {
 
     private static final TransactionBroadcaster failBroadcaster = new TransactionBroadcaster() {
         @Override
-        public ListenableFuture<Transaction> broadcastTransaction(Transaction tx) {
+        public TransactionBroadcast broadcastTransaction(Transaction tx) {
             fail();
             return null;
         }
@@ -72,10 +71,10 @@ public class ChannelConnectionTest extends TestWithWallet {
         sendMoneyToWallet(COIN, AbstractBlockChain.NewBlockType.BEST_CHAIN);
         sendMoneyToWallet(COIN, AbstractBlockChain.NewBlockType.BEST_CHAIN);
         wallet.addExtension(new StoredPaymentChannelClientStates(wallet, failBroadcaster));
-        serverWallet = new Wallet(params);
+        Context context = new Context(params, 3);  // Shorter event horizon for unit tests.
+        serverWallet = new Wallet(context);
         serverWallet.addExtension(new StoredPaymentChannelServerStates(serverWallet, failBroadcaster));
         serverWallet.freshReceiveKey();
-        serverChain = new BlockChain(params, serverWallet, blockStore);
         // Use an atomic boolean to indicate failure because fail()/assert*() dont work in network threads
         fail = new AtomicBoolean(false);
 
@@ -85,12 +84,12 @@ public class ChannelConnectionTest extends TestWithWallet {
         broadcastTxPause = new Semaphore(0);
         mockBroadcaster = new TransactionBroadcaster() {
             @Override
-            public ListenableFuture<Transaction> broadcastTransaction(Transaction tx) {
+            public TransactionBroadcast broadcastTransaction(Transaction tx) {
                 broadcastTxPause.acquireUninterruptibly();
                 SettableFuture<Transaction> future = SettableFuture.create();
                 future.set(tx);
                 broadcasts.add(tx);
-                return future;
+                return TransactionBroadcast.createMockBroadcast(tx, future);
             }
         };
 
@@ -292,7 +291,7 @@ public class ChannelConnectionTest extends TestWithWallet {
         // Tests various aspects of channel resuming.
         Utils.setMockClock();
 
-        final Sha256Hash someServerId = Sha256Hash.create(new byte[]{});
+        final Sha256Hash someServerId = Sha256Hash.hash(new byte[]{});
 
         // Open up a normal channel.
         ChannelTestUtils.RecordingPair pair = ChannelTestUtils.makeRecorders(serverWallet, mockBroadcaster);
@@ -342,7 +341,7 @@ public class ChannelConnectionTest extends TestWithWallet {
         pair.server.receiveMessage(Protos.TwoWayChannelMessage.newBuilder()
                 .setType(MessageType.CLIENT_VERSION)
                 .setClientVersion(Protos.ClientVersion.newBuilder()
-                        .setPreviousChannelContractHash(ByteString.copyFrom(Sha256Hash.create(new byte[]{0x03}).getBytes()))
+                        .setPreviousChannelContractHash(ByteString.copyFrom(Sha256Hash.hash(new byte[]{0x03}).getBytes()))
                         .setMajor(CLIENT_MAJOR_VERSION).setMinor(42))
                 .build());
         pair.serverRecorder.checkNextMsg(MessageType.SERVER_VERSION);

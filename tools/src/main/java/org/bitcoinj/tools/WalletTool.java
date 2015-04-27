@@ -64,8 +64,10 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.security.SecureRandom;
 import java.text.ParseException;
+import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -84,7 +86,7 @@ public class WalletTool {
 
     private static OptionSet options;
     private static OptionSpec<Date> dateFlag;
-    private static OptionSpec<Integer> unixtimeFlag;
+    private static OptionSpec<Long> unixtimeFlag;
     private static OptionSpec<String> seedFlag, watchFlag;
     private static OptionSpec<String> xpubkeysFlag;
 
@@ -164,6 +166,7 @@ public class WalletTool {
         ADD_KEY,
         ADD_ADDR,
         DELETE_KEY,
+        CURRENT_RECEIVE_ADDR,
         SYNC,
         RESET,
         SEND,
@@ -216,7 +219,7 @@ public class WalletTool {
         OptionSpec<String> outputFlag = parser.accepts("output").withRequiredArg();
         parser.accepts("value").withRequiredArg();
         parser.accepts("fee").withRequiredArg();
-        unixtimeFlag = parser.accepts("unixtime").withRequiredArg().ofType(Integer.class);
+        unixtimeFlag = parser.accepts("unixtime").withRequiredArg().ofType(Long.class);
         OptionSpec<String> conditionFlag = parser.accepts("condition").withRequiredArg();
         parser.accepts("locktime").withRequiredArg();
         parser.accepts("allow-unconfirmed");
@@ -340,6 +343,7 @@ public class WalletTool {
             case ADD_KEY: addKey(); break;
             case ADD_ADDR: addAddr(); break;
             case DELETE_KEY: deleteKey(); break;
+            case CURRENT_RECEIVE_ADDR: currentReceiveAddr(); break;
             case RESET: reset(); break;
             case SYNC: syncChain(); break;
             case SEND:
@@ -443,8 +447,7 @@ public class WalletTool {
 
     private static void rotate() throws BlockStoreException {
         setup();
-        peers.startAsync();
-        peers.awaitRunning();
+        peers.start();
         // Set a key rotation time and possibly broadcast the resulting maintenance transactions.
         long rotationTimeSecs = Utils.currentTimeSeconds();
         if (options.has(dateFlag)) {
@@ -561,7 +564,7 @@ public class WalletTool {
 
             try {
                 if (lockTimeStr != null) {
-                    t.setLockTime(Transaction.parseLockTimeStr(lockTimeStr));
+                    t.setLockTime(parseLockTimeStr(lockTimeStr));
                     // For lock times to take effect, at least one output must have a non-final sequence number.
                     t.getInputs().get(0).setSequenceNumber(0);
                     // And because we modified the transaction after it was completed, we must re-sign the inputs.
@@ -581,12 +584,11 @@ public class WalletTool {
             }
 
             setup();
-            peers.startAsync();
-            peers.awaitRunning();
+            peers.start();
             // Wait for peers to connect, the tx to be sent to one of them and for it to be propagated across the
             // network. Once propagation is complete and we heard the transaction back from all our peers, it will
             // be committed to the wallet.
-            peers.broadcastTransaction(t).get();
+            peers.broadcastTransaction(t).future().get();
             // Hack for regtest/single peer mode, as we're about to shut down and won't get an ACK from the remote end.
             List<Peer> peerList = peers.getConnectedPeers();
             if (peerList.size() == 1)
@@ -602,6 +604,19 @@ public class WalletTool {
         } catch (InsufficientMoneyException e) {
             System.err.println("Insufficient funds: have " + wallet.getBalance().toFriendlyString());
         }
+    }
+
+    /**
+     * Parses the string either as a whole number of blocks, or if it contains slashes as a YYYY/MM/DD format date
+     * and returns the lock time in wire format.
+     */
+    private static long parseLockTimeStr(String lockTimeStr) throws ParseException {
+        if (lockTimeStr.indexOf("/") != -1) {
+            SimpleDateFormat format = new SimpleDateFormat("yyyy/MM/dd", Locale.US);
+            Date date = format.parse(lockTimeStr);
+            return date.getTime() / 1000;
+        }
+        return Long.parseLong(lockTimeStr);
     }
 
     private static void sendPaymentRequest(String location, boolean verifyPki) {
@@ -685,9 +700,8 @@ public class WalletTool {
             ListenableFuture<PaymentProtocol.Ack> future = session.sendPayment(ImmutableList.of(req.tx), null, null);
             if (future == null) {
                 // No payment_url for submission so, broadcast and wait.
-                peers.startAsync();
-                peers.awaitRunning();
-                peers.broadcastTransaction(req.tx).get();
+                peers.start();
+                peers.broadcastTransaction(req.tx).future().get();
             } else {
                 PaymentProtocol.Ack ack = future.get();
                 wallet.commitTx(req.tx);
@@ -748,8 +762,7 @@ public class WalletTool {
             case BLOCK:
                 peers.addEventListener(new AbstractPeerEventListener() {
                     @Override
-                    public void onBlocksDownloaded(Peer peer, Block block, int blocksLeft) {
-                        super.onBlocksDownloaded(peer, block, blocksLeft);
+                    public void onBlocksDownloaded(Peer peer, Block block, @Nullable FilteredBlock filteredBlock, int blocksLeft) {
                         // Check if we already ran. This can happen if a block being received triggers download of more
                         // blocks, or if we receive another block whilst the peer group is shutting down.
                         if (latch.getCount() == 0) return;
@@ -813,7 +826,7 @@ public class WalletTool {
             chain = new FullPrunedBlockChain(params, wallet, s);
         }
         // This will ensure the wallet is saved when it changes.
-        wallet.autosaveToFile(walletFile, 200, TimeUnit.MILLISECONDS, null);
+        wallet.autosaveToFile(walletFile, 5, TimeUnit.SECONDS, null);
         if (options.has("tor")) {
             try {
                 peers = PeerGroup.newWithTor(params, chain, new TorClient());
@@ -848,9 +861,8 @@ public class WalletTool {
         try {
             setup();
             int startTransactions = wallet.getTransactions(true).size();
-            DownloadListener listener = new DownloadListener();
-            peers.startAsync();
-            peers.awaitRunning();
+            DownloadProgressTracker listener = new DownloadProgressTracker();
+            peers.start();
             peers.startBlockChainDownload(listener);
             try {
                 listener.await();
@@ -871,8 +883,7 @@ public class WalletTool {
     private static void shutdown() {
         try {
             if (peers == null) return;  // setup() never called so nothing to do.
-            peers.stopAsync();
-            peers.awaitTerminated();
+            peers.stop();
             saveWallet(walletFile);
             store.close();
             wallet = null;
@@ -1062,6 +1073,11 @@ public class WalletTool {
             return;
         }
         wallet.removeKey(key);
+    }
+
+    private static void currentReceiveAddr() {
+        ECKey key = wallet.currentReceiveKey();
+        System.out.println(key.toAddress(params) + " " + key);
     }
 
     private static void dumpWallet() throws BlockStoreException {

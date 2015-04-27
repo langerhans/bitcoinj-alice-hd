@@ -21,7 +21,7 @@ import org.bitcoinj.script.Script;
 import org.bitcoinj.script.Script.VerifyFlag;
 import org.bitcoinj.store.BlockStoreException;
 import org.bitcoinj.store.FullPrunedBlockStore;
-import org.bitcoinj.utils.DaemonThreadFactory;
+import org.bitcoinj.utils.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -38,11 +38,11 @@ import static com.google.common.base.Preconditions.checkState;
 
 /**
  * <p>A FullPrunedBlockChain works in conjunction with a {@link FullPrunedBlockStore} to verify all the rules of the
- * Bitcoin system, with the downside being a larg cost in system resources. Fully verifying means all unspent transaction
- * outputs are stored. Once a transaction output is spent and that spend is buried deep enough, the data related to it
- * is deleted to ensure disk space usage doesn't grow forever. For this reason a pruning node cannot serve the full
- * block chain to other clients, but it nevertheless provides the same security guarantees as a regular Satoshi
- * client does.</p>
+ * Bitcoin system, with the downside being a large cost in system resources. Fully verifying means all unspent
+ * transaction outputs are stored. Once a transaction output is spent and that spend is buried deep enough, the data
+ * related to it is deleted to ensure disk space usage doesn't grow forever. For this reason a pruning node cannot
+ * serve the full block chain to other clients, but it nevertheless provides the same security guarantees as a regular
+ * Satoshi client does.</p>
  */
 public class FullPrunedBlockChain extends AbstractBlockChain {    
     private static final Logger log = LoggerFactory.getLogger(FullPrunedBlockChain.class);
@@ -54,32 +54,46 @@ public class FullPrunedBlockChain extends AbstractBlockChain {
     private boolean runScripts = true;
 
     /**
-     * Constructs a BlockChain connected to the given wallet and store. To obtain a {@link Wallet} you can construct
+     * Constructs a block chain connected to the given wallet and store. To obtain a {@link Wallet} you can construct
+     * one from scratch, or you can deserialize a saved wallet from disk using {@link Wallet#loadFromFile(java.io.File)}
+     */
+    public FullPrunedBlockChain(Context context, Wallet wallet, FullPrunedBlockStore blockStore) throws BlockStoreException {
+        this(context, new ArrayList<BlockChainListener>(), blockStore);
+        addWallet(wallet);
+    }
+
+    /**
+     * Constructs a block chain connected to the given wallet and store. To obtain a {@link Wallet} you can construct
      * one from scratch, or you can deserialize a saved wallet from disk using {@link Wallet#loadFromFile(java.io.File)}
      */
     public FullPrunedBlockChain(NetworkParameters params, Wallet wallet, FullPrunedBlockStore blockStore) throws BlockStoreException {
-        this(params, new ArrayList<BlockChainListener>(), blockStore);
-        if (wallet != null)
-            addWallet(wallet);
+        this(Context.getOrCreate(params), wallet, blockStore);
     }
 
-    /**
-     * Constructs a BlockChain that has no wallet at all. This is helpful when you don't actually care about sending
-     * and receiving coins but rather, just want to explore the network data structures.
-     */
+    /** Constructs a block chain connected to the given store. */
+    public FullPrunedBlockChain(Context context, FullPrunedBlockStore blockStore) throws BlockStoreException {
+        this(context, new ArrayList<BlockChainListener>(), blockStore);
+    }
+
+    /** See {@link #FullPrunedBlockChain(Context, Wallet, FullPrunedBlockStore)} */
     public FullPrunedBlockChain(NetworkParameters params, FullPrunedBlockStore blockStore) throws BlockStoreException {
-        this(params, new ArrayList<BlockChainListener>(), blockStore);
+        this(Context.getOrCreate(params), blockStore);
     }
 
     /**
-     * Constructs a BlockChain connected to the given list of wallets and a store.
+     * Constructs a block chain connected to the given list of wallets and a store.
      */
-    public FullPrunedBlockChain(NetworkParameters params, List<BlockChainListener> listeners,
-                                FullPrunedBlockStore blockStore) throws BlockStoreException {
-        super(params, listeners, blockStore);
+    public FullPrunedBlockChain(Context context, List<BlockChainListener> listeners, FullPrunedBlockStore blockStore) throws BlockStoreException {
+        super(context, listeners, blockStore);
         this.blockStore = blockStore;
         // Ignore upgrading for now
         this.chainHead = blockStore.getVerifiedChainHead();
+    }
+
+    /** See {@link #FullPrunedBlockChain(Context, List, FullPrunedBlockStore)} */
+    public FullPrunedBlockChain(NetworkParameters params, List<BlockChainListener> listeners,
+                                FullPrunedBlockStore blockStore) throws BlockStoreException {
+        this(Context.getOrCreate(params), listeners, blockStore);
     }
 
     @Override
@@ -123,7 +137,7 @@ public class FullPrunedBlockChain extends AbstractBlockChain {
     
     // TODO: execute in order of largest transaction (by input count) first
     ExecutorService scriptVerificationExecutor = Executors.newFixedThreadPool(
-            Runtime.getRuntime().availableProcessors(), new DaemonThreadFactory());
+            Runtime.getRuntime().availableProcessors(), new ContextPropagatingThreadFactory("Script verification"));
 
     /** A job submitted to the executor which verifies signatures. */
     private static class Verifier implements Callable<VerificationException> {
@@ -149,7 +163,45 @@ public class FullPrunedBlockChain extends AbstractBlockChain {
             return null;
         }
     }
-    
+
+    /** Get the {@link Script} from the script bytes or null if it doesn't parse. */
+    @Nullable
+    private Script getScript(byte[] scriptBytes) {
+        try {
+            return new Script(scriptBytes);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Get the address from the {@link Script} if it exists otherwise return empty string "".
+     * @param script The script.
+     * @return The address.
+     */
+    private String getScriptAddress(@Nullable Script script) {
+        String address = "";
+        try {
+            if (script != null) {
+                address = script.getToAddress(params, true).toString();
+            }
+        } catch (Exception e) {
+        }
+        return address;
+    }
+
+    /**
+     * Get the {@link Script.ScriptType} of this script.
+     * @param script The script.
+     * @return The script type.
+     */
+    private Script.ScriptType getScriptType(@Nullable Script script) {
+        if (script != null) {
+            return script.getScriptType();
+        }
+        return Script.ScriptType.NO_TYPE;
+    }
+
     @Override
     protected TransactionOutputChanges connectTransactions(int height, Block block)
             throws VerificationException, BlockStoreException {
@@ -161,8 +213,8 @@ public class FullPrunedBlockChain extends AbstractBlockChain {
 
         blockStore.beginDatabaseBatchWrite();
 
-        LinkedList<StoredTransactionOutput> txOutsSpent = new LinkedList<StoredTransactionOutput>();
-        LinkedList<StoredTransactionOutput> txOutsCreated = new LinkedList<StoredTransactionOutput>();  
+        LinkedList<UTXO> txOutsSpent = new LinkedList<UTXO>();
+        LinkedList<UTXO> txOutsCreated = new LinkedList<UTXO>();
         long sigOps = 0;
         final Set<VerifyFlag> verifyFlags = EnumSet.noneOf(VerifyFlag.class);
         if (block.getTimeSeconds() >= NetworkParameters.BIP16_ENFORCE_TIME)
@@ -199,7 +251,7 @@ public class FullPrunedBlockChain extends AbstractBlockChain {
                     // outputs.
                     for (int index = 0; index < tx.getInputs().size(); index++) {
                         TransactionInput in = tx.getInputs().get(index);
-                        StoredTransactionOutput prevOut = blockStore.getTransactionOutput(in.getOutpoint().getHash(),
+                        UTXO prevOut = blockStore.getTransactionOutput(in.getOutpoint().getHash(),
                                                                                           in.getOutpoint().getIndex());
                         if (prevOut == null)
                             throw new VerificationException("Attempted to spend a non-existent or already spent output!");
@@ -232,8 +284,14 @@ public class FullPrunedBlockChain extends AbstractBlockChain {
                 for (TransactionOutput out : tx.getOutputs()) {
                     valueOut = valueOut.add(out.getValue());
                     // For each output, add it to the set of unspent outputs so it can be consumed in future.
-                    StoredTransactionOutput newOut = new StoredTransactionOutput(hash, out.getIndex(), out.getValue(),
-                            height, isCoinBase, out.getScriptBytes());
+                    Script script = getScript(out.getScriptBytes());
+                    UTXO newOut = new UTXO(hash,
+                            out.getIndex(),
+                            out.getValue(),
+                            height, isCoinBase,
+                            out.getScriptBytes(),
+                            getScriptAddress(script),
+                            getScriptType(script).ordinal());
                     blockStore.addUnspentTransactionOutput(newOut);
                     txOutsCreated.add(newOut);
                 }
@@ -304,8 +362,8 @@ public class FullPrunedBlockChain extends AbstractBlockChain {
         try {
             List<Transaction> transactions = block.getTransactions();
             if (transactions != null) {
-                LinkedList<StoredTransactionOutput> txOutsSpent = new LinkedList<StoredTransactionOutput>();
-                LinkedList<StoredTransactionOutput> txOutsCreated = new LinkedList<StoredTransactionOutput>();
+                LinkedList<UTXO> txOutsSpent = new LinkedList<UTXO>();
+                LinkedList<UTXO> txOutsCreated = new LinkedList<UTXO>();
                 long sigOps = 0;
                 final Set<VerifyFlag> verifyFlags = EnumSet.noneOf(VerifyFlag.class);
                 if (newBlock.getHeader().getTimeSeconds() >= NetworkParameters.BIP16_ENFORCE_TIME)
@@ -331,7 +389,7 @@ public class FullPrunedBlockChain extends AbstractBlockChain {
                     if (!isCoinBase) {
                         for (int index = 0; index < tx.getInputs().size(); index++) {
                             final TransactionInput in = tx.getInputs().get(index);
-                            final StoredTransactionOutput prevOut = blockStore.getTransactionOutput(in.getOutpoint().getHash(),
+                            final UTXO prevOut = blockStore.getTransactionOutput(in.getOutpoint().getHash(),
                                                                                                     in.getOutpoint().getIndex());
                             if (prevOut == null)
                                 throw new VerificationException("Attempted spend of a non-existent or already spent output!");
@@ -355,9 +413,15 @@ public class FullPrunedBlockChain extends AbstractBlockChain {
                     Sha256Hash hash = tx.getHash();
                     for (TransactionOutput out : tx.getOutputs()) {
                         valueOut = valueOut.add(out.getValue());
-                        StoredTransactionOutput newOut = new StoredTransactionOutput(hash, out.getIndex(), out.getValue(),
-                                                                                     newBlock.getHeight(), isCoinBase,
-                                                                                     out.getScriptBytes());
+                        Script script = getScript(out.getScriptBytes());
+                        UTXO newOut = new UTXO(hash,
+                                out.getIndex(),
+                                out.getValue(),
+                                newBlock.getHeight(),
+                                isCoinBase,
+                                out.getScriptBytes(),
+                                getScriptAddress(script),
+                                getScriptType(script).ordinal());
                         blockStore.addUnspentTransactionOutput(newOut);
                         txOutsCreated.add(newOut);
                     }
@@ -400,14 +464,14 @@ public class FullPrunedBlockChain extends AbstractBlockChain {
             } else {
                 txOutChanges = block.getTxOutChanges();
                 if (!params.isCheckpoint(newBlock.getHeight()))
-                    for(StoredTransactionOutput out : txOutChanges.txOutsCreated) {
+                    for(UTXO out : txOutChanges.txOutsCreated) {
                         Sha256Hash hash = out.getHash();
                         if (blockStore.getTransactionOutput(hash, out.getIndex()) != null)
                             throw new VerificationException("Block failed BIP30 test!");
                     }
-                for (StoredTransactionOutput out : txOutChanges.txOutsCreated)
+                for (UTXO out : txOutChanges.txOutsCreated)
                     blockStore.addUnspentTransactionOutput(out);
-                for (StoredTransactionOutput out : txOutChanges.txOutsSpent)
+                for (UTXO out : txOutChanges.txOutsSpent)
                     blockStore.removeUnspentTransactionOutput(out);
             }
         } catch (VerificationException e) {
@@ -434,9 +498,9 @@ public class FullPrunedBlockChain extends AbstractBlockChain {
             StoredUndoableBlock undoBlock = blockStore.getUndoBlock(oldBlock.getHeader().getHash());
             if (undoBlock == null) throw new PrunedException(oldBlock.getHeader().getHash());
             TransactionOutputChanges txOutChanges = undoBlock.getTxOutChanges();
-            for(StoredTransactionOutput out : txOutChanges.txOutsSpent)
+            for(UTXO out : txOutChanges.txOutsSpent)
                 blockStore.addUnspentTransactionOutput(out);
-            for(StoredTransactionOutput out : txOutChanges.txOutsCreated)
+            for(UTXO out : txOutChanges.txOutsCreated)
                 blockStore.removeUnspentTransactionOutput(out);
         } catch (PrunedException e) {
             blockStore.abortDatabaseBatchWrite();
