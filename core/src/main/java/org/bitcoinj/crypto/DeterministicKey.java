@@ -559,10 +559,7 @@ public class DeterministicKey extends ECKey {
      */
     @Override
     public void setCreationTimeSeconds(long newCreationTimeSeconds) {
-        if (parent != null)
-            throw new IllegalStateException("Creation time can only be set on root keys.");
-        else
-            super.setCreationTimeSeconds(newCreationTimeSeconds);
+        super.setCreationTimeSeconds(newCreationTimeSeconds);
     }
 
     /**

@@ -371,7 +371,6 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
      * This constructor allows the specification of the root node you want to watch from
      */
     public DeterministicKeyChain(DeterministicKey watchingKey, long creationTimeSeconds, ImmutableList<ChildNumber> rootNodeList) {
-        checkArgument(watchingKey.isPubKeyOnly(), "Private subtrees not currently supported");
         basicKeyChain = new BasicKeyChain();
         this.creationTimeSeconds = creationTimeSeconds;
         this.seed = null;
