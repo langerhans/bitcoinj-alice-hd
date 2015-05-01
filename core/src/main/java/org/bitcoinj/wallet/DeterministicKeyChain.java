@@ -32,7 +32,6 @@ import com.google.protobuf.ByteString;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.spongycastle.crypto.params.KeyParameter;
-import org.spongycastle.math.ec.ECPoint;
 
 import javax.annotation.Nullable;
 import java.math.BigInteger;
@@ -61,10 +60,6 @@ import static com.google.common.collect.Lists.newLinkedList;
  * A watching wallet is not instantiated using the public part of the master key as you may imagine. Instead, you
  * need to take the account key (first child of the master key) and provide the public part of that to the watching
  * wallet instead. You can do this by calling {@link #getWatchingKey()} and then serializing it with
- * {@link org.bitcoinj.crypto.DeterministicKey#serializePubB58()}. The resulting "xpub..." string encodes
- * sufficient information about the account key to create a watching chain via
- * {@link org.bitcoinj.crypto.DeterministicKey#deserializeB58(org.bitcoinj.crypto.DeterministicKey, String)}
- * (with null as the first parameter) and then
  * {@link DeterministicKeyChain#DeterministicKeyChain(org.bitcoinj.crypto.DeterministicKey)}.</p>
  *
  * <p>This class builds on {@link org.bitcoinj.crypto.DeterministicHierarchy} and
@@ -376,7 +371,6 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
      * This constructor allows the specification of the root node you want to watch from
      */
     public DeterministicKeyChain(DeterministicKey watchingKey, long creationTimeSeconds, ImmutableList<ChildNumber> rootNodeList) {
-        checkArgument(watchingKey.isPubKeyOnly(), "Private subtrees not currently supported");
         basicKeyChain = new BasicKeyChain();
         this.creationTimeSeconds = creationTimeSeconds;
         this.seed = null;
@@ -544,7 +538,9 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                 (isTrezorPath(key.getPath()) && key.getPath().size() != 5)) continue; // Not a leaf key - Trezor leaves are of form e.g. (M/44H/0H/0H/0/1)
             DeterministicKey parentKey = hierarchy.get(checkNotNull(key.getParent()).getPath(), false, false);
             // Clone the key to the new encrypted hierarchy.
-            key = new DeterministicKey(key.getPubOnly(), parentKey);
+
+            key = new DeterministicKey(key.dropPrivateBytes(), parentKey);
+
             hierarchy.putKey(key);
             basicKeyChain.importKey(key);
         }
@@ -775,13 +771,24 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
     }
 
     /**
+
      * <p>An alias for <code>getKeyByPath(rootNodeList).getPubOnly()</code>.
      * Use this when you would like to create a watching key chain that follows this one, but can't spend money from it.
+
      * The returned key can be serialized and then passed into {@link #watch(org.bitcoinj.crypto.DeterministicKey)}
      * on another system to watch the hierarchy.</p>
+     *
+     * <p>Note that the returned key is not pubkey only unless this key chain already is: the returned key can still
+     * be used for signing etc if the private key bytes are available.</p>
      */
     public DeterministicKey getWatchingKey() {
-        return getKeyByPath(rootNodeList, true).getPubOnly();
+        return getKeyByPath(rootNodeList, true).dropPrivateBytes();
+    }
+
+    /** Returns true if this chain is watch only, meaning it has public keys but no private key. */
+    public boolean isWatching() {
+        DeterministicKey key = getKeyByPath(rootNodeList, true);
+        return key.isWatching();
     }
 
     @Override
@@ -1233,7 +1240,8 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
             checkState(key.isEncrypted());
             DeterministicKey parent = chain.hierarchy.get(checkNotNull(key.getParent()).getPath(), false, false);
             // Clone the key to the new decrypted hierarchy.
-            key = new DeterministicKey(key.getPubOnly(), parent);
+
+            key = new DeterministicKey(key.dropPrivateBytes(), parent);
             System.out.println("DeterministicKeyChain - cloned, decrypted key: " + key.toString());
             chain.hierarchy.putKey(key);
             chain.basicKeyChain.importKey(key);
@@ -1407,7 +1415,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         int nextChild = numChildren;
         for (int i = 0; i < needed; i++) {
             DeterministicKey key = HDKeyDerivation.deriveThisOrNextChildKey(parent, nextChild);
-            key = key.getPubOnly();
+            key = key.dropPrivateBytes();
             hierarchy.putKey(key);
             result.add(key);
             nextChild = key.getChildNumber().num() + 1;

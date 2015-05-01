@@ -65,7 +65,7 @@ public class WalletAppKit extends AbstractIdleService {
     protected final String filePrefix;
     protected final NetworkParameters params;
     protected volatile BlockChain vChain;
-    protected volatile SPVBlockStore vStore;
+    protected volatile BlockStore vStore;
     protected volatile Wallet vWallet;
     protected volatile PeerGroup vPeerGroup;
 
@@ -84,8 +84,21 @@ public class WalletAppKit extends AbstractIdleService {
     @Nullable protected DeterministicSeed restoreFromSeed;
     @Nullable protected PeerDiscovery discovery;
 
+    protected volatile Context context;
+
+    /**
+     * Creates a new WalletAppKit, with a newly created {@link Context}. Files will be stored in the given directory.
+     */
     public WalletAppKit(NetworkParameters params, File directory, String filePrefix) {
-        this.params = checkNotNull(params);
+        this(new Context(params), directory, filePrefix);
+    }
+
+    /**
+     * Creates a new WalletAppKit, with the given {@link Context}. Files will be stored in the given directory.
+     */
+    public WalletAppKit(Context context, File directory, String filePrefix) {
+        this.context = context;
+        this.params = checkNotNull(context.getParams());
         this.directory = checkNotNull(directory);
         this.filePrefix = checkNotNull(filePrefix);
         if (!Utils.isAndroidRuntime()) {
@@ -210,6 +223,13 @@ public class WalletAppKit extends AbstractIdleService {
     }
 
     /**
+     * Override this to use a {@link BlockStore} that isn't the default of {@link SPVBlockStore}.
+     */
+    protected BlockStore provideBlockStore(File file) throws BlockStoreException {
+        return new SPVBlockStore(params, file);
+    }
+
+    /**
      * This method is invoked on a background thread after all objects are initialised, but before the peer group
      * or block chain download is started. You can tweak the objects configuration here.
      */
@@ -218,13 +238,15 @@ public class WalletAppKit extends AbstractIdleService {
     /**
      * Tests to see if the spvchain file has an operating system file lock on it. Useful for checking if your app
      * is already running. If another copy of your app is running and you start the appkit anyway, an exception will
-     * be thrown during the startup process. Returns false if the chain file does not exist.
+     * be thrown during the startup process. Returns false if the chain file does not exist or is a directory.
      */
     public boolean isChainFileLocked() throws IOException {
         RandomAccessFile file2 = null;
         try {
             File file = new File(directory, filePrefix + ".spvchain");
             if (!file.exists())
+                return false;
+            if (file.isDirectory())
                 return false;
             file2 = new RandomAccessFile(file, "rw");
             FileLock lock = file2.getChannel().tryLock();
@@ -241,6 +263,7 @@ public class WalletAppKit extends AbstractIdleService {
     @Override
     protected void startUp() throws Exception {
         // Runs in a separate thread.
+        Context.propagate(context);
         if (!directory.exists()) {
             if (!directory.mkdirs()) {
                 throw new IOException("Could not create directory " + directory.getAbsolutePath());
@@ -255,7 +278,7 @@ public class WalletAppKit extends AbstractIdleService {
             vWallet = createOrLoadWallet(shouldReplayWallet);
 
             // Initiate Bitcoin network objects (block store, blockchain and peer group)
-            vStore = new SPVBlockStore(params, chainFile);
+            vStore = provideBlockStore(chainFile);
             if (!chainFileExists || restoreFromSeed != null) {
                 if (checkpoints != null) {
                     // Initialize the chain file with a checkpoint to speed up first-run sync.
@@ -272,7 +295,10 @@ public class WalletAppKit extends AbstractIdleService {
                     } else {
                         time = vWallet.getEarliestKeyCreationTime();
                     }
-                    CheckpointManager.checkpoint(params, checkpoints, vStore, time);
+                    if (time > 0)
+                        CheckpointManager.checkpoint(params, checkpoints, vStore, time);
+                    else
+                        log.warn("Creating a new uncheckpointed block store due to a wallet with a creation time of zero: this will result in a very slow chain sync");
                 } else if (chainFileExists) {
                     log.info("Deleting the chain file in preparation from restore.");
                     vStore.close();
@@ -346,7 +372,7 @@ public class WalletAppKit extends AbstractIdleService {
             wallet.saveToFile(vWalletFile);
         }
 
-        if (useAutoSave) wallet.autosaveToFile(vWalletFile, 200, TimeUnit.MILLISECONDS, null);
+        if (useAutoSave) wallet.autosaveToFile(vWalletFile, 5, TimeUnit.SECONDS, null);
 
         return wallet;
     }
@@ -446,6 +472,7 @@ public class WalletAppKit extends AbstractIdleService {
     protected void shutDown() throws Exception {
         // Runs in a separate thread.
         try {
+            Context.propagate(context);
             vPeerGroup.stop();
             vWallet.saveToFile(vWalletFile);
             vStore.close();
@@ -468,7 +495,7 @@ public class WalletAppKit extends AbstractIdleService {
         return vChain;
     }
 
-    public SPVBlockStore store() {
+    public BlockStore store() {
         checkState(state() == State.STARTING || state() == State.RUNNING, "Cannot call until startup is complete");
         return vStore;
     }

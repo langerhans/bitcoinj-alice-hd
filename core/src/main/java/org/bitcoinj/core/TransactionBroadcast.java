@@ -41,31 +41,26 @@ public class TransactionBroadcast {
     private final SettableFuture<Transaction> future = SettableFuture.create();
     private final PeerGroup peerGroup;
     private final Transaction tx;
-    @Nullable private final Context context;
     private int minConnections;
     private int numWaitingFor;
 
     /** Used for shuffling the peers before broadcast: unit tests can replace this to make themselves deterministic. */
     @VisibleForTesting
     public static Random random = new Random();
-
-    private Transaction pinnedTx;
-
+    
     // Tracks which nodes sent us a reject message about this broadcast, if any. Useful for debugging.
     private Map<Peer, RejectMessage> rejects = Collections.synchronizedMap(new HashMap<Peer, RejectMessage>());
 
-    // TODO: Context being owned by BlockChain isn't right w.r.t future intentions so it shouldn't really be optional here.
-    TransactionBroadcast(PeerGroup peerGroup, @Nullable Context context, Transaction tx) {
+    TransactionBroadcast(PeerGroup peerGroup, Transaction tx) {
         this.peerGroup = peerGroup;
-        this.context = context;
         this.tx = tx;
         this.minConnections = Math.max(1, peerGroup.getMinBroadcastConnections());
+        log.debug("Creating transactionBroadcast with identity {} for tx with hash {} and identity {}", System.identityHashCode(this), tx.getHashAsString(), System.identityHashCode(tx));
     }
 
     // Only for mock broadcasts.
     private TransactionBroadcast(Transaction tx) {
         this.peerGroup = null;
-        this.context = null;
         this.tx = tx;
     }
 
@@ -98,6 +93,7 @@ public class TransactionBroadcast {
             if (m instanceof RejectMessage) {
                 RejectMessage rejectMessage = (RejectMessage)m;
                 if (tx.getHash().equals(rejectMessage.getRejectedObjectHash())) {
+                    log.debug("Transaction {} has been rejected by peer {}", tx.getHashAsString(), peer);
                     rejects.put(peer, rejectMessage);
                     int size = rejects.size();
                     long threshold = Math.round(numWaitingFor / 2.0);
@@ -114,7 +110,7 @@ public class TransactionBroadcast {
 
     public ListenableFuture<Transaction> broadcast() {
         peerGroup.addEventListener(rejectionListener, Threading.SAME_THREAD);
-        log.info("Waiting for {} peers required for broadcast, we have {} ...", minConnections, peerGroup.getConnectedPeers().size());
+        log.debug("Waiting for {} peers required for broadcast, we have {} ...", minConnections, peerGroup.getConnectedPeers().size());
         peerGroup.waitForPeers(minConnections).addListener(new EnoughAvailablePeers(), Threading.SAME_THREAD);
         return future;
     }
@@ -132,13 +128,20 @@ public class TransactionBroadcast {
             // be seen, 4 peers is probably too little - it doesn't taken many broken peers for tx propagation to have
             // a big effect.
             List<Peer> peers = peerGroup.getConnectedPeers();    // snapshots
-            // We intern the tx here so we are using a canonical version of the object (as it's unfortunately mutable).
-            // TODO: Once confidence state is moved out of Transaction we can kill off this step.
-            pinnedTx = context != null ? context.getConfidenceTable().intern(tx) : tx;
             // Prepare to send the transaction by adding a listener that'll be called when confidence changes.
             // Only bother with this if we might actually hear back:
-            if (minConnections > 1)
-                pinnedTx.getConfidence().addEventListener(new ConfidenceChange());
+            if (minConnections > 1) {
+                // ALICE
+                Preconditions.checkNotNull(Context.get());
+                TransactionConfidence confidenceInTable = Context.get().getConfidenceTable().getOrCreate(tx.getHash());
+                confidenceInTable.addEventListener(new ConfidenceChange());
+
+                log.debug("tx hash: {}", tx.getHashAsString());
+                log.debug("Context.get(): {}", Context.get());
+                log.debug("Context().get().getConfidenceTable(): {}", Context.get().getConfidenceTable());
+                log.debug("The transaction confidence from the table has identity: {}", System.identityHashCode(confidenceInTable));
+            }
+
             // Satoshis code sends an inv in this case and then lets the peer request the tx data. We just
             // blast out the TX here for a couple of reasons. Firstly it's simpler: in the case where we have
             // just a single connection we don't have to wait for getdata to be received and handled before
@@ -152,11 +155,11 @@ public class TransactionBroadcast {
             numWaitingFor = (int) Math.ceil((peers.size() - numToBroadcastTo) / 2.0);
             Collections.shuffle(peers, random);
             peers = peers.subList(0, numToBroadcastTo);
-            log.info("broadcastTransaction: We have {} peers, adding {} to the memory pool", numConnected, tx.getHashAsString());
-            log.info("Sending to {} peers, will wait for {}, sending to: {}", numToBroadcastTo, numWaitingFor, Joiner.on(",").join(peers));
+            log.debug("broadcastTransaction: We have {} peers, adding {} to the memory pool", numConnected, tx.getHashAsString());
+            log.debug("Sending to {} peers, will wait for {}, sending to: {}", numToBroadcastTo, numWaitingFor, Joiner.on(",").join(peers));
             for (Peer peer : peers) {
                 try {
-                    peer.sendMessage(pinnedTx);
+                    peer.sendMessage(tx);
                     // We don't record the peer as having seen the tx in the memory pool because we want to track only
                     // how many peers announced to us.
                 } catch (Exception e) {
@@ -169,10 +172,13 @@ public class TransactionBroadcast {
             // any peer discovery source and the user just calls connectTo() once.
             if (minConnections == 1) {
                 peerGroup.removeEventListener(rejectionListener);
-                future.set(pinnedTx);
+                future.set(tx);
             }
         }
     }
+
+    private int numSeemPeers;
+    private boolean mined;
 
     private class ConfidenceChange implements TransactionConfidence.Listener {
         @Override
@@ -180,11 +186,11 @@ public class TransactionBroadcast {
             // The number of peers that announced this tx has gone up.
             int numSeenPeers = conf.numBroadcastPeers() + rejects.size();
             boolean mined = tx.getAppearsInHashes() != null;
-            log.info("broadcastTransaction: {}:  TX {} seen by {} peers{}", reason, pinnedTx.getHashAsString(),
+            log.debug("broadcastTransaction: {}:  TX {} seen by {} peers{}", reason, tx.getHashAsString(),
                     numSeenPeers, mined ? " and mined" : "");
 
             // Progress callback on the requested thread.
-            invokeProgressCallback(numSeenPeers, mined);
+            invokeAndRecord(numSeenPeers, mined);
 
             if (numSeenPeers >= numWaitingFor || mined) {
                 // We've seen the min required number of peers announce the transaction, or it was included
@@ -200,16 +206,25 @@ public class TransactionBroadcast {
                 //
                 // We're done! It's important that the PeerGroup lock is not held (by this thread) at this
                 // point to avoid triggering inversions when the Future completes.
-                log.info("broadcastTransaction: {} complete", pinnedTx.getHashAsString());
+                log.debug("broadcastTransaction: {} complete", tx.getHash());
                 peerGroup.removeEventListener(rejectionListener);
                 conf.removeEventListener(this);
-                future.set(pinnedTx);  // RE-ENTRANCY POINT
+                future.set(tx);  // RE-ENTRANCY POINT
             }
         }
     }
 
+    private void invokeAndRecord(int numSeenPeers, boolean mined) {
+        synchronized (this) {
+            this.numSeemPeers = numSeenPeers;
+            this.mined = mined;
+        }
+        invokeProgressCallback(numSeenPeers, mined);
+    }
+
     private void invokeProgressCallback(int numSeenPeers, boolean mined) {
         final ProgressCallback callback;
+        log.debug("Invoking progress callback numSeenPeers: {}, callback is: {}", numSeenPeers, System.identityHashCode(this.callback));
         Executor executor;
         synchronized (this) {
             callback = this.callback;
@@ -217,17 +232,21 @@ public class TransactionBroadcast {
         }
         if (callback != null) {
             final double progress = Math.min(1.0, mined ? 1.0 : numSeenPeers / (double) numWaitingFor);
+            log.debug("Progress is {}", progress);
             checkState(progress >= 0.0 && progress <= 1.0, progress);
             try {
-                if (executor == null)
+                if (executor == null) {
+                    log.debug("calling onBroadcastProgress 1.");
                     callback.onBroadcastProgress(progress);
-                else
+                } else {
+                    log.debug("calling onBroadcastProgress 1.");
                     executor.execute(new Runnable() {
                         @Override
                         public void run() {
                             callback.onBroadcastProgress(progress);
                         }
                     });
+                }
             } catch (Throwable e) {
                 log.error("Exception during progress callback", e);
             }
@@ -252,7 +271,8 @@ public class TransactionBroadcast {
 
     /**
      * Sets the given callback for receiving progress values, which will run on the user thread. See
-     * {@link org.bitcoinj.utils.Threading} for details.
+     * {@link org.bitcoinj.utils.Threading} for details.  If the broadcast has already started then the callback will
+     * be invoked immediately with the current progress.
      */
     public void setProgressCallback(ProgressCallback callback) {
         setProgressCallback(callback, Threading.USER_THREAD);
@@ -261,10 +281,22 @@ public class TransactionBroadcast {
     /**
      * Sets the given callback for receiving progress values, which will run on the given executor. If the executor
      * is null then the callback will run on a network thread and may be invoked multiple times in parallel. You
-     * probably want to provide your UI thread or Threading.USER_THREAD for the second parameter.
+     * probably want to provide your UI thread or Threading.USER_THREAD for the second parameter. If the broadcast
+     * has already started then the callback will be invoked immediately with the current progress.
      */
-    public synchronized void setProgressCallback(ProgressCallback callback, @Nullable Executor executor) {
-        this.callback = callback;
-        this.progressCallbackExecutor = executor;
+    public void setProgressCallback(ProgressCallback callback, @Nullable Executor executor) {
+        boolean shouldInvoke;
+        int num;
+        boolean mined;
+        log.debug("Setting callback to be {}", System.identityHashCode(callback));
+        synchronized (this) {
+            this.callback = callback;
+            this.progressCallbackExecutor = executor;
+            num = this.numSeemPeers;
+            mined = this.mined;
+            shouldInvoke = numWaitingFor > 0;
+        }
+        if (shouldInvoke)
+            invokeProgressCallback(num, mined);
     }
 }

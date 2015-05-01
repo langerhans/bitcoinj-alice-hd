@@ -38,6 +38,8 @@ import java.util.*;
 import static org.bitcoinj.script.ScriptOpCodes.*;
 import static com.google.common.base.Preconditions.*;
 
+// TODO: Redesign this entire API to be more type safe and organised.
+
 /**
  * <p>Programs embedded inside transactions that control redemption of payments.</p>
  *
@@ -101,7 +103,7 @@ public class Script {
     public Script(byte[] programBytes) throws ScriptException {
         program = programBytes;
         parse(programBytes);
-        creationTimeSeconds = Utils.currentTimeSeconds();
+        creationTimeSeconds = 0;
     }
 
     public Script(byte[] programBytes, long creationTimeSeconds) throws ScriptException {
@@ -478,6 +480,22 @@ public class Script {
         }
 
         throw new IllegalStateException("Could not find matching key " + key.toString() + " in script " + this);
+    }
+
+    /**
+     * Returns a list of the keys required by this script, assuming a multi-sig script.
+     *
+     * @throws ScriptException if the script type is not understood or is pay to address or is P2SH (run this method on the "Redeem script" instead).
+     */
+    public List<ECKey> getPubKeys() {
+        if (!isSentToMultiSig())
+            throw new ScriptException("Only usable for multisig scripts.");
+
+        ArrayList<ECKey> result = Lists.newArrayList();
+        int numKeys = Script.decodeFromOpN(chunks.get(chunks.size() - 2).opcode);
+        for (int i = 0 ; i < numKeys ; i++)
+            result.add(ECKey.fromPublicOnly(chunks.get(1 + i).data));
+        return result;
     }
 
     private int findSigInRedeem(byte[] signatureBytes, Sha256Hash hash) {

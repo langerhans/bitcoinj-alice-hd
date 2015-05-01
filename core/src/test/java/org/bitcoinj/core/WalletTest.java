@@ -387,11 +387,16 @@ public class WalletTest extends TestWithWallet {
         basicSanityChecks(wallet, t2, destination);
 
         // Broadcast the transaction and commit.
+        List<TransactionOutput> unspents1 = wallet.getUnspents();
+        assertEquals(1, unspents1.size());
         broadcastAndCommit(wallet, t2);
+        List<TransactionOutput> unspents2 = wallet.getUnspents();
+        assertNotEquals(unspents1, unspents2.size());
 
         // Now check that we can spend the unconfirmed change, with a new change address of our own selection.
         // (req.aesKey is null for unencrypted / the correct aesKey for encrypted.)
-        spendUnconfirmedChange(wallet, t2, req.aesKey);
+        wallet = spendUnconfirmedChange(wallet, t2, req.aesKey);
+        assertNotEquals(unspents2, wallet.getUnspents());
     }
 
     private void receiveATransaction(Wallet wallet, Address toAddress) throws Exception {
@@ -457,7 +462,7 @@ public class WalletTest extends TestWithWallet {
         assertEquals(1, txns.size());
     }
 
-    private void spendUnconfirmedChange(Wallet wallet, Transaction t2, KeyParameter aesKey) throws Exception {
+    private Wallet spendUnconfirmedChange(Wallet wallet, Transaction t2, KeyParameter aesKey) throws Exception {
         if (wallet.getTransactionSigners().size() == 1)   // don't bother reconfiguring the p2sh wallet
             wallet = roundTrip(wallet);
         Coin v3 = valueOf(0, 49);
@@ -479,6 +484,7 @@ public class WalletTest extends TestWithWallet {
         wallet.receiveFromBlock(t3, bp.storedBlock, AbstractBlockChain.NewBlockType.BEST_CHAIN, 1);
         wallet.notifyNewBestBlock(bp.storedBlock);
         assertTrue(wallet.isConsistent());
+        return wallet;
     }
 
     @Test
@@ -1182,12 +1188,22 @@ public class WalletTest extends TestWithWallet {
         log.info(t2.toString(chain));
     }
 
-    @Test(expected = ECKey.MissingPrivateKeyException.class)
+    @Test
+    public void isWatching() {
+        assertFalse(wallet.isWatching());
+        Wallet watchingWallet = Wallet.fromWatchingKey(params, wallet.getWatchingKey().dropPrivateBytes().dropParent());
+        assertTrue(watchingWallet.isWatching());
+        wallet.encrypt(PASSWORD1);
+        assertFalse(wallet.isWatching());
+    }
+
+    @Test
     public void watchingWallet() throws Exception {
         DeterministicKey watchKey = wallet.getWatchingKey();
         String serialized = watchKey.serializePubB58(params);
-        watchKey = DeterministicKey.deserializeB58(null, serialized, params);
-        Wallet watchingWallet = Wallet.fromWatchingKey(params, watchKey);
+
+        // Construct watching wallet.
+        Wallet watchingWallet = Wallet.fromWatchingKey(params, DeterministicKey.deserializeB58(null, serialized, params));
         DeterministicKey key2 = watchingWallet.freshReceiveKey();
         assertEquals(myKey, key2);
 
@@ -1195,7 +1211,17 @@ public class WalletTest extends TestWithWallet {
         key2 = watchingWallet.freshKey(KeyChain.KeyPurpose.CHANGE);
         assertEquals(key, key2);
         key.sign(Sha256Hash.ZERO_HASH);
-        key2.sign(Sha256Hash.ZERO_HASH);
+        try {
+            key2.sign(Sha256Hash.ZERO_HASH);
+            fail();
+        } catch (ECKey.MissingPrivateKeyException e) {
+            // Expected
+        }
+
+        receiveATransaction(watchingWallet, myKey.toAddress(params));
+        assertEquals(COIN, watchingWallet.getBalance());
+        assertEquals(COIN, watchingWallet.getBalance(Wallet.BalanceType.AVAILABLE));
+        assertEquals(ZERO, watchingWallet.getBalance(Wallet.BalanceType.AVAILABLE_SPENDABLE));
     }
 
     @Test(expected = ECKey.MissingPrivateKeyException.class)
@@ -1234,8 +1260,7 @@ public class WalletTest extends TestWithWallet {
         Transaction t1 = createFakeTx(params, CENT, watchedAddress);
         StoredBlock b3 = createFakeBlock(blockStore, t1).storedBlock;
         wallet.receiveFromBlock(t1, b3, BlockChain.NewBlockType.BEST_CHAIN, 0);
-        assertEquals(ZERO, wallet.getBalance());
-        assertEquals(CENT, wallet.getWatchedBalance());
+        assertEquals(CENT, wallet.getBalance());
 
         // We can't spend watched balances
         Address notMyAddr = new ECKey().toAddress(params);
@@ -2848,8 +2873,14 @@ public class WalletTest extends TestWithWallet {
 
     @Test (expected = ECKey.MissingPrivateKeyException.class)
     public void completeTxPartiallySignedThrows() throws Exception {
-        byte[] emptySig = new byte[]{};
-        completeTxPartiallySigned(Wallet.MissingSigsMode.THROW, emptySig);
+        sendMoneyToWallet(wallet, CENT, wallet.freshReceiveKey(), AbstractBlockChain.NewBlockType.BEST_CHAIN);
+        SendRequest req = SendRequest.emptyWallet(new ECKey().toAddress(params));
+        wallet.completeTx(req);
+        // Delete the sigs
+        for (TransactionInput input : req.tx.getInputs())
+            input.setScriptBytes(new byte[]{});
+        Wallet watching = Wallet.fromWatchingKey(params, wallet.getWatchingKey().dropParent().dropPrivateBytes());
+        watching.completeTx(Wallet.SendRequest.forTx(req.tx));
     }
 
     @Test
