@@ -173,8 +173,9 @@ public class BasicKeyChain implements EncryptableKeyChain {
         } else {
             if (key.isWatching() && !isWatching)
                 throw new IllegalArgumentException("Key is watching but chain is not");
-            if (!key.isWatching() && isWatching)
-                throw new IllegalArgumentException("Key is not watching but chain is");
+            // ALICE
+            //if (!key.isWatching() && isWatching)
+            //    throw new IllegalArgumentException("Key is not watching but chain is");
         }
         ECKey previousKey = pubkeyToKeys.put(ByteString.copyFrom(key.getPubKey()), key);
         hashToKeys.put(ByteString.copyFrom(key.getPubKeyHash()), key);

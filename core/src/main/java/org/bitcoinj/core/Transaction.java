@@ -17,6 +17,9 @@
 
 package org.bitcoinj.core;
 
+import com.google.common.collect.ImmutableMap;
+import com.google.common.primitives.Ints;
+import com.google.common.primitives.Longs;
 import org.bitcoinj.core.TransactionConfidence.ConfidenceType;
 import org.bitcoinj.crypto.TransactionSignature;
 import org.bitcoinj.script.Script;
@@ -24,9 +27,6 @@ import org.bitcoinj.script.ScriptBuilder;
 import org.bitcoinj.script.ScriptOpCodes;
 import org.bitcoinj.utils.ExchangeRate;
 import org.bitcoinj.wallet.WalletTransaction.Pool;
-import com.google.common.collect.ImmutableMap;
-import com.google.common.primitives.Ints;
-import com.google.common.primitives.Longs;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -34,8 +34,8 @@ import javax.annotation.Nullable;
 import java.io.*;
 import java.util.*;
 
-import static org.bitcoinj.core.Utils.*;
 import static com.google.common.base.Preconditions.checkState;
+import static org.bitcoinj.core.Utils.*;
 
 /**
  * <p>A transaction represents the movement of coins from some addresses to some other addresses. It can also represent
@@ -1157,7 +1157,7 @@ public class Transaction extends ChildMessage implements Serializable {
             confidence = confidenceInTable;
         } else {
             // Check the confidence in the Context confidence table is the same object
-            if (!(System.identityHashCode(confidence) == System.identityHashCode(confidenceInTable))) {
+            if (System.identityHashCode(confidence) != System.identityHashCode(confidenceInTable)) {
                 log.debug("Confidence in tx has identity {} but the one in the confidence table is {}", System.identityHashCode(confidence), System.identityHashCode(confidenceInTable));
                 log.debug("Using the one in the confidence table");
                 confidence = confidenceInTable;
