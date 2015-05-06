@@ -133,13 +133,64 @@ public class TransactionBroadcast {
             if (minConnections > 1) {
                 // ALICE
                 Preconditions.checkNotNull(Context.get());
-                TransactionConfidence confidenceInTable = Context.get().getConfidenceTable().getOrCreate(tx.getHash());
-                confidenceInTable.addEventListener(new ConfidenceChange());
+                final Sha256Hash transactionHash = tx.getHash();
+                final TransactionConfidence confidenceInTable = Context.get().getConfidenceTable().getOrCreate(transactionHash);
+                ConfidenceChange confidenceChange = new ConfidenceChange();
+                confidenceInTable.addEventListener(confidenceChange);
 
                 log.debug("tx hash: {}", tx.getHashAsString());
                 log.debug("Context.get(): {}", Context.get());
                 log.debug("Context().get().getConfidenceTable(): {}", Context.get().getConfidenceTable());
                 log.debug("The transaction confidence from the table has identity: {}", System.identityHashCode(confidenceInTable));
+
+                peerGroup.addEventListener(new PeerEventListener() {
+                    @Override
+                    public void onPeersDiscovered(Set<PeerAddress> peerAddresses) {
+
+                    }
+
+                    @Override
+                    public void onBlocksDownloaded(Peer peer, Block block, @Nullable FilteredBlock filteredBlock, int blocksLeft) {
+
+                    }
+
+                    @Override
+                    public void onChainDownloadStarted(Peer peer, int blocksLeft) {
+
+                    }
+
+                    @Override
+                    public void onPeerConnected(Peer peer, int peerCount) {
+
+                    }
+
+                    @Override
+                    public void onPeerDisconnected(Peer peer, int peerCount) {
+
+                    }
+
+                    @Override
+                    public Message onPreMessageReceived(Peer peer, Message m) {
+                        return null;
+                    }
+
+                    @Override
+                    public void onTransaction(Peer peer, Transaction t) {
+                        if (t.getHash().equals(transactionHash)) {
+                            log.debug("In transaction broadcast PeerEventListener saw the transaction {} on peer {}");
+                            confidenceInTable.markBroadcastBy(peer.getAddress());
+                            boolean mined = tx.getAppearsInHashes() != null;
+                            log.debug("In transaction broadcast PeerEventListener: invokedAndRecorded");
+                            invokeAndRecord(confidenceInTable.numBroadcastPeers(), mined );
+                        }
+                    }
+
+                    @Nullable
+                    @Override
+                    public List<Message> getData(Peer peer, GetDataMessage m) {
+                        return null;
+                    }
+                });
             }
 
             // Satoshis code sends an inv in this case and then lets the peer request the tx data. We just
