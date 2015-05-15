@@ -2472,28 +2472,41 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      */
     private void addWalletTransaction(Pool pool, Transaction tx) {
         checkState(lock.isHeldByCurrentThread());
-        transactions.put(tx.getHash(), tx);
-        // ALICE - remove check tx is already in pool - does not work with replay
+        // ALICE - move checkstate tx is already in pool to skip - does not work with replay
+        if (transactions.get(tx.getHash()) == null) {
+          transactions.put(tx.getHash(), tx);
+        }
+
         switch (pool) {
         case UNSPENT:
+          if (unspent.get(tx.getHash()) == null) {
             unspent.put(tx.getHash(), tx);
-            break;
+          }
+          break;
         case SPENT:
+          if (spent.get(tx.getHash()) == null) {
             spent.put(tx.getHash(), tx);
-            break;
+          }
+          break;
         case PENDING:
+          if (pending.get(tx.getHash()) == null) {
             pending.put(tx.getHash(), tx);
-            break;
+          }
+          break;
         case DEAD:
+          if (dead.get(tx.getHash()) == null) {
             dead.put(tx.getHash(), tx);
-            break;
+          }
+          break;
         default:
             throw new RuntimeException("Unknown wallet transaction type " + pool);
         }
         if (pool == Pool.UNSPENT || pool == Pool.PENDING) {
             for (TransactionOutput output : tx.getOutputs()) {
                 if (output.isAvailableForSpending() && output.isMineOrWatched(this))
+                  if (!myUnspents.contains(output)) {
                     myUnspents.add(output);
+                  }
             }
         }
         // This is safe even if the listener has been added before, as TransactionConfidence ignores duplicate
@@ -2620,6 +2633,8 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
         pending.clear();
         dead.clear();
         transactions.clear();
+
+        myUnspents.clear();
     }
 
     /**
