@@ -477,7 +477,9 @@ public class PeerGroup implements TransactionBroadcaster {
             try {
                 discoverySuccess = discoverPeers() > 0;
             } catch (PeerDiscoveryException e) {
-                log.error("Peer discovery failure", e);
+                // Do not put the full stacktrace in the log - only the top level text
+                // This is to stop repeat connection attempts cluttering up the logs
+                log.error("Peer discovery failure, class:{}, message:{}", e.getClass().getCanonicalName(), e.getMessage());
             }
 
             long retryTime;
