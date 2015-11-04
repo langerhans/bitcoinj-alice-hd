@@ -576,10 +576,8 @@ public class DeterministicKey extends ECKey {
      */
     @Override
     public void setCreationTimeSeconds(long newCreationTimeSeconds) {
-        if (parent != null)
-            throw new IllegalStateException("Creation time can only be set on root keys.");
-        else
-            super.setCreationTimeSeconds(newCreationTimeSeconds);
+        // ALICE - trezor top node is not a root node so take out IllegalStateException check
+        super.setCreationTimeSeconds(newCreationTimeSeconds);
     }
 
     /**

@@ -43,6 +43,7 @@ import org.spongycastle.crypto.params.*;
 import javax.annotation.*;
 import java.io.*;
 import java.util.*;
+
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 import java.util.concurrent.locks.*;
@@ -222,17 +223,36 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
         this(context, new KeyChainGroup(context.getParams()));
     }
 
-    public static Wallet fromSeed(NetworkParameters params, DeterministicSeed seed) {
-        return new Wallet(params, new KeyChainGroup(params, seed));
-    }
+  public static Wallet fromSeed(NetworkParameters params, DeterministicSeed seed) {
+         return new Wallet(params, new KeyChainGroup(params, seed));
+     }
 
-    /**
-     * Creates a wallet that tracks payments to and from the HD key hierarchy rooted by the given watching key. A
-     * watching key corresponds to account zero in the recommended BIP32 key hierarchy.
-     */
-    public static Wallet fromWatchingKey(NetworkParameters params, DeterministicKey watchKey, long creationTimeSeconds) {
-        return new Wallet(params, new KeyChainGroup(params, watchKey, creationTimeSeconds));
-    }
+  /**
+   * ALICE
+   * Create a wallet using the provided rootNodeList as the top node in the HD chain
+   * @param rootNodeList the path corresponding to the root account node to use
+   * @param crypter the KeyCrypter to use to encrypt the wallet keys
+   */
+  public static Wallet fromSeed(NetworkParameters params, DeterministicSeed seed, ImmutableList<ChildNumber> rootNodeList, CharSequence password, KeyCrypter crypter) {
+         return new Wallet(params, new KeyChainGroup(params, seed, rootNodeList, password, crypter));
+  }
+
+  /**
+    * Creates a wallet that tracks payments to and from the HD key hierarchy rooted by the given watching key. A
+    * watching key corresponds to account zero in the recommended BIP32 key hierarchy.
+    */
+   public static Wallet fromWatchingKey(NetworkParameters params, DeterministicKey watchKey, long creationTimeSeconds) {
+       return new Wallet(params, new KeyChainGroup(params, watchKey, creationTimeSeconds));
+   }
+
+  /**
+    * Creates a wallet that tracks payments to and from the HD key hierarchy rooted by the given watching key. A
+    * watching key corresponds to an account in the recommended BIP32 key hierarchy.
+    * @param rootNodeList the path corresponding to the root account node to use for the watching key
+    */
+   public static Wallet fromWatchingKey(NetworkParameters params, DeterministicKey watchKey, long creationTimeSeconds, ImmutableList<ChildNumber> rootNodeList) {
+       return new Wallet(params, new KeyChainGroup(params, watchKey, creationTimeSeconds, rootNodeList));
+   }
 
     /**
      * Creates a wallet that tracks payments to and from the HD key hierarchy rooted by the given watching key. A
@@ -1892,7 +1912,8 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
 
         informConfidenceListenersIfNotReorganizing();
         checkState(isConsistent());
-        saveNow();
+        // ALICE - saveLater rather than saveNow so as to improve replay / sync
+        saveLater();
     }
 
     private void informConfidenceListenersIfNotReorganizing() {
@@ -2247,7 +2268,8 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
 
             checkState(isConsistent());
             informConfidenceListenersIfNotReorganizing();
-            saveNow();
+            // ALICE - defer wallet write - improves replay performance
+            saveLater();
         } finally {
             lock.unlock();
         }
@@ -2450,27 +2472,41 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      */
     private void addWalletTransaction(Pool pool, Transaction tx) {
         checkState(lock.isHeldByCurrentThread());
-        transactions.put(tx.getHash(), tx);
+        // ALICE - move checkstate tx is already in pool to skip - does not work with replay
+        if (transactions.get(tx.getHash()) == null) {
+          transactions.put(tx.getHash(), tx);
+        }
+
         switch (pool) {
         case UNSPENT:
-            checkState(unspent.put(tx.getHash(), tx) == null);
-            break;
+          if (unspent.get(tx.getHash()) == null) {
+            unspent.put(tx.getHash(), tx);
+          }
+          break;
         case SPENT:
-            checkState(spent.put(tx.getHash(), tx) == null);
-            break;
+          if (spent.get(tx.getHash()) == null) {
+            spent.put(tx.getHash(), tx);
+          }
+          break;
         case PENDING:
-            checkState(pending.put(tx.getHash(), tx) == null);
-            break;
+          if (pending.get(tx.getHash()) == null) {
+            pending.put(tx.getHash(), tx);
+          }
+          break;
         case DEAD:
-            checkState(dead.put(tx.getHash(), tx) == null);
-            break;
+          if (dead.get(tx.getHash()) == null) {
+            dead.put(tx.getHash(), tx);
+          }
+          break;
         default:
             throw new RuntimeException("Unknown wallet transaction type " + pool);
         }
         if (pool == Pool.UNSPENT || pool == Pool.PENDING) {
             for (TransactionOutput output : tx.getOutputs()) {
                 if (output.isAvailableForSpending() && output.isMineOrWatched(this))
+                  if (!myUnspents.contains(output)) {
                     myUnspents.add(output);
+                  }
             }
         }
         // This is safe even if the listener has been added before, as TransactionConfidence ignores duplicate
@@ -2876,6 +2912,18 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
         }
     }
 
+  /**
+   * Set the key creation time
+   * @param keyCreationTimeSeconds the key creation time in seconds
+   */
+  public void setEarliestKeyCreationTime(long keyCreationTimeSeconds) {
+          keychainLock.lock();
+          try {
+              keychain.setEarliestKeyCreationTime(keyCreationTimeSeconds);
+          } finally {
+              keychainLock.unlock();
+          }
+      }
     /** Returns the hash of the last seen best-chain block, or null if the wallet is too old to store this data. */
     @Nullable
     public Sha256Hash getLastBlockSeenHash() {
@@ -3602,7 +3650,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
     public void completeTx(SendRequest req) throws InsufficientMoneyException {
         lock.lock();
         try {
-            checkArgument(!req.completed, "Given SendRequest has already been completed.");
+            // ALICE - allow a send request to be completed twice - used in Empty wallet
             // Calculate the amount of value we need to import.
             Coin value = Coin.ZERO;
             for (TransactionOutput output : req.tx.getOutputs()) {
@@ -3851,7 +3899,14 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
             return data != null && canSignFor(data.redeemScript);
         } else if (script.isSentToAddress()) {
             ECKey key = findKeyFromPubHash(script.getPubKeyHash());
-            return key != null && (key.isEncrypted() || key.hasPrivKey());
+
+            // ALICE: A Trezor based key (m/44h path) does not have a private key but can still 'sign for' the script
+            boolean isTrezorKey = false;
+            if (key instanceof DeterministicKey) {
+              DeterministicKey deterministicKey = (DeterministicKey)key;
+              isTrezorKey = deterministicKey.getPath() != null && !deterministicKey.getPath().isEmpty() && deterministicKey.getPath().get(0).equals(new ChildNumber(44 | ChildNumber.HARDENED_BIT));
+            }
+            return key != null && (key.isEncrypted() || key.hasPrivKey()) || isTrezorKey;
         } else if (script.isSentToMultiSig()) {
             for (ECKey pubkey : script.getPubKeys()) {
                 ECKey key = findKeyFromPubKey(pubkey.getPubKey());
@@ -4756,7 +4811,8 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
         // Don't hold the wallet lock whilst doing this, so if the broadcaster accesses the wallet at some point there
         // is no inversion.
         for (Transaction tx : toBroadcast) {
-            checkState(tx.getConfidence().getConfidenceType() == ConfidenceType.PENDING);
+            checkState(tx.getConfidence().getConfidenceType() == ConfidenceType.PENDING ||
+                    tx.getConfidence().getConfidenceType() == ConfidenceType.UNKNOWN);
             // Re-broadcast even if it's marked as already seen for two reasons
             // 1) Old wallets may have transactions marked as broadcast by 1 peer when in reality the network
             //    never saw it, due to bugs.
@@ -4956,4 +5012,5 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
         }
     }
     //endregion
+  
 }

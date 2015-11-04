@@ -86,6 +86,18 @@ public class KeyChainGroup implements KeyBag {
     }
 
     /**
+     * ALICE
+     * Creates a keychain group with no basic chain, and an HD chain initialized from the given seed and rootNodeList
+     * The KeyChainGroup is encrypted sing the crypter and password
+     *
+     * */
+    public KeyChainGroup(NetworkParameters params, DeterministicSeed seed, ImmutableList<ChildNumber> rootNodeList, CharSequence password, KeyCrypter crypter) {
+      this(params, null, ImmutableList.of(new DeterministicKeyChain(seed, rootNodeList)), null, null, 1, null);
+      KeyParameter aesKey = crypter.deriveKey(password);
+      this.encrypt(crypter, aesKey, rootNodeList);
+    }
+
+    /**
      * Creates a keychain group with no basic chain, and an HD chain that is watching the given watching key.
      * This HAS to be an account key as returned by {@link DeterministicKeyChain#getWatchingKey()}.
      */
@@ -93,13 +105,51 @@ public class KeyChainGroup implements KeyBag {
         this(params, null, ImmutableList.of(DeterministicKeyChain.watch(watchKey)), null, null);
     }
 
-    /**
+
+  /**
      * Creates a keychain group with no basic chain, and an HD chain that is watching the given watching key which
      * was assumed to be first used at the given UNIX time.
      * This HAS to be an account key as returned by {@link DeterministicKeyChain#getWatchingKey()}.
+     *
+     * ALICE
+     * @param params Network parameters
+     * @param watchKey The key to watch
+     * @param creationTimeSecondsSecs Creation time of the wallet in seconds
      */
     public KeyChainGroup(NetworkParameters params, DeterministicKey watchKey, long creationTimeSecondsSecs) {
-        this(params, null, ImmutableList.of(DeterministicKeyChain.watch(watchKey, creationTimeSecondsSecs)), null, null);
+        this(params, null, ImmutableList.of(DeterministicKeyChain.watch(watchKey, creationTimeSecondsSecs)), null, null, 1, null);
+    }
+
+    /**
+     * Creates a keychain group with no basic chain, with an HD chain initialized from the given seed and being followed
+     * by given list of watch keys. Watch keys have to be account keys.
+
+    /**
+     * ALICE
+     * @param params Network parameters
+     * @param watchKey The key to watch
+     * @param creationTimeSecondsSecs Creation time of the wallet in seconds
+     * @param rootNodeList The root node to use for the wallet (e.g. account 44 for Trezor wallets)
+     */
+    public KeyChainGroup(NetworkParameters params, DeterministicKey watchKey, long creationTimeSecondsSecs, ImmutableList<ChildNumber> rootNodeList) {
+        this(params, null, ImmutableList.of(DeterministicKeyChain.watch(watchKey, creationTimeSecondsSecs, rootNodeList)), null, null, 1, null);
+    }
+
+    /**
+     * ALICE
+     * TODO Fill in comments
+     *
+     * @param params
+     * @param keyChain
+     * @param chains
+     * @param currentKeys
+     * @param followingKeychains
+     * @param sigsRequiredToSpend
+     * @param crypter
+     */
+    public KeyChainGroup(NetworkParameters params, BasicKeyChain keyChain, ImmutableList<DeterministicKeyChain> chains, EnumMap<KeyChain.KeyPurpose, DeterministicKey> currentKeys, Multimap<DeterministicKey,
+      DeterministicKeyChain> followingKeychains, int sigsRequiredToSpend, KeyCrypter crypter) {
+      this(params, keyChain, chains, currentKeys, crypter);
     }
 
     // Used for deserialization.
@@ -123,18 +173,31 @@ public class KeyChainGroup implements KeyBag {
         }
     }
 
-    // This keeps married redeem data in sync with the number of keys issued
+
+  // This keeps married redeem data in sync with the number of keys issued
     private void maybeLookaheadScripts() {
         for (DeterministicKeyChain chain : chains) {
             chain.maybeLookAheadScripts();
         }
     }
 
-    /** Adds a new HD chain to the chains list, and make it the default chain (from which keys are issued). */
-    public void createAndActivateNewHDChain() {
+  /**
+   * ALICE
+   * Adds a new HD chain to the chains list, and make it the default chain (from which keys are issued).
+   * */
+    public void createAndActivateNewHDChain(ImmutableList<ChildNumber> rootPathNode) {
         // We can't do auto upgrade here because we don't know the rotation time, if any.
-        final DeterministicKeyChain chain = new DeterministicKeyChain(new SecureRandom());
+        final DeterministicKeyChain chain = new DeterministicKeyChain(new SecureRandom(), rootPathNode);
+        log.debug("chain:" + chain);
         addAndActivateHDChain(chain);
+    }
+
+  /**
+   * ALICE
+   * Adds a new HD chain to the chains list, and make it the default chain (from which keys are issued).
+   */
+    public void createAndActivateNewHDChain() {
+      createAndActivateNewHDChain(DeterministicKeyChain.ACCOUNT_ZERO_PATH);
     }
 
     /**
@@ -489,7 +552,20 @@ public class KeyChainGroup implements KeyBag {
         return !chains.isEmpty() && getActiveKeyChain().isMarried();
     }
 
+  /**
+   * Encrypt the keys in the group using the KeyCrypter and the AES key. A good default KeyCrypter to use is
+   * {@link org.bitcoinj.crypto.KeyCrypterScrypt}.
+   *
+   * @throws org.bitcoinj.crypto.KeyCrypterException Thrown if the wallet encryption fails for some reason,
+   *         leaving the group unchanged.
+   * @throws DeterministicUpgradeRequiredException Thrown if there are random keys but no HD chain.
+   */
+  public void encrypt(KeyCrypter keyCrypter, KeyParameter aesKey) {
+    encrypt(keyCrypter, aesKey, ImmutableList.<ChildNumber>of());
+  }
     /**
+     *
+     * ALICE
      * Encrypt the keys in the group using the KeyCrypter and the AES key. A good default KeyCrypter to use is
      * {@link org.bitcoinj.crypto.KeyCrypterScrypt}.
      *
@@ -497,7 +573,7 @@ public class KeyChainGroup implements KeyBag {
      *         leaving the group unchanged.
      * @throws DeterministicUpgradeRequiredException Thrown if there are random keys but no HD chain.
      */
-    public void encrypt(KeyCrypter keyCrypter, KeyParameter aesKey) {
+    public void encrypt(KeyCrypter keyCrypter, KeyParameter aesKey, @Nullable ImmutableList<ChildNumber> rootNodeList) {
         checkNotNull(keyCrypter);
         checkNotNull(aesKey);
         // This code must be exception safe.
@@ -506,10 +582,12 @@ public class KeyChainGroup implements KeyBag {
         if (chains.isEmpty() && basic.numKeys() == 0) {
             // No HD chains and no random keys: encrypting an entirely empty keychain group. But we can't do that, we
             // must have something to encrypt: so instantiate a new HD chain here.
-            createAndActivateNewHDChain();
+            createAndActivateNewHDChain(rootNodeList);
         }
-        for (DeterministicKeyChain chain : chains)
-            newChains.add(chain.toEncrypted(keyCrypter, aesKey));
+        for (DeterministicKeyChain chain : chains) {
+          log.debug("chain: " + chain.toString());
+          newChains.add(chain.toEncrypted(keyCrypter, aesKey, rootNodeList));
+        }
         this.keyCrypter = keyCrypter;
         basic = newBasic;
         chains.clear();
@@ -586,6 +664,12 @@ public class KeyChainGroup implements KeyBag {
         return time;
     }
 
+  public void setEarliestKeyCreationTime(long earliestKeyCreationTimeSeconds) {
+        for (DeterministicKeyChain chain : chains) {
+          chain.setEarliestKeyCreationTime(earliestKeyCreationTimeSeconds);
+        }
+    }
+
     public int getBloomFilterElementCount() {
         int result = basic.numBloomFilterEntries();
         for (DeterministicKeyChain chain : chains) {
@@ -655,6 +739,7 @@ public class KeyChainGroup implements KeyBag {
     }
 
     public static KeyChainGroup fromProtobufUnencrypted(NetworkParameters params, List<Protos.Key> keys, KeyChainFactory factory) throws UnreadableWalletException {
+        System.out.println("KeyChainGroup#fromProtobufUnencrypted There are " + (keys == null ? 0 : keys.size()) + " keys.");
         BasicKeyChain basicKeyChain = BasicKeyChain.fromProtobufUnencrypted(keys);
         List<DeterministicKeyChain> chains = DeterministicKeyChain.fromProtobuf(keys, null, factory);
         EnumMap<KeyChain.KeyPurpose, DeterministicKey> currentKeys = null;
@@ -670,6 +755,7 @@ public class KeyChainGroup implements KeyBag {
 
     public static KeyChainGroup fromProtobufEncrypted(NetworkParameters params, List<Protos.Key> keys, KeyCrypter crypter, KeyChainFactory factory) throws UnreadableWalletException {
         checkNotNull(crypter);
+        System.out.println("KeyChainGroup#fromProtobufEncrypted There are " + (keys == null ? 0 : keys.size()) + " keys.");
         BasicKeyChain basicKeyChain = BasicKeyChain.fromProtobufEncrypted(keys, crypter);
         List<DeterministicKeyChain> chains = DeterministicKeyChain.fromProtobuf(keys, crypter, factory);
         EnumMap<KeyChain.KeyPurpose, DeterministicKey> currentKeys = null;
@@ -759,22 +845,49 @@ public class KeyChainGroup implements KeyBag {
 
         EnumMap<KeyChain.KeyPurpose, DeterministicKey> currentKeys = new EnumMap<KeyChain.KeyPurpose, DeterministicKey>(KeyChain.KeyPurpose.class);
 
+        // Work out the path the are relative to
+        // For regular bitcoinj wallets the root is 0H/ with, say, the 4th external address as 0H/0/3
+        // and the third internal address as 0H/1/2
+
+        // For Trezor wallets the root is 44H/0H/0H.  The 4th external address as 44H/0H/0H/0/3
+        // and the third internal address as 44H/0H/0H/1/2
+        ImmutableList<ChildNumber> rootNodePath = ImmutableList.of(ChildNumber.ZERO_HARDENED);
+        if (activeChain.getRootKey() != null && !activeChain.getRootKey().getPath().isEmpty()) {
+
+          if (DeterministicKeyChain.isTrezorPath(activeChain.getRootKey().getPath())) {
+            // Trezor wallet
+            List<ChildNumber> rootNodePathMutable = new ArrayList<ChildNumber>();
+            rootNodePathMutable.add(new ChildNumber(44 | ChildNumber.HARDENED_BIT));
+            rootNodePathMutable.add(new ChildNumber(ChildNumber.HARDENED_BIT));
+            rootNodePathMutable.add(new ChildNumber(ChildNumber.HARDENED_BIT));
+            rootNodePath = ImmutableList.copyOf(rootNodePathMutable);
+          }
+        }
+        log.debug("rootNodePath: {}", rootNodePath);
+
         // assuming that only RECEIVE and CHANGE keys are being used at the moment, we will treat latest issued external key
         // as current RECEIVE key and latest issued internal key as CHANGE key. This should be changed as soon as other
         // kinds of KeyPurpose are introduced.
         if (activeChain.getIssuedExternalKeys() > 0) {
-            DeterministicKey currentExternalKey = activeChain.getKeyByPath(
-                    HDUtils.append(
-                            HDUtils.concat(activeChain.getAccountPath(), DeterministicKeyChain.EXTERNAL_SUBPATH),
-                            new ChildNumber(activeChain.getIssuedExternalKeys() - 1)));
+
+            List<ChildNumber> externalPath = Lists.newArrayList(rootNodePath);
+            externalPath.add(ChildNumber.ZERO);
+            externalPath.add(new ChildNumber(activeChain.getIssuedExternalKeys() - 1));
+
+            log.debug("externalPath: " + externalPath.toString());
+            DeterministicKey currentExternalKey = activeChain.getKeyByPath(ImmutableList.copyOf(externalPath));
+
             currentKeys.put(KeyChain.KeyPurpose.RECEIVE_FUNDS, currentExternalKey);
         }
 
         if (activeChain.getIssuedInternalKeys() > 0) {
-            DeterministicKey currentInternalKey = activeChain.getKeyByPath(
-                    HDUtils.append(
-                            HDUtils.concat(activeChain.getAccountPath(), DeterministicKeyChain.INTERNAL_SUBPATH),
-                            new ChildNumber(activeChain.getIssuedInternalKeys() - 1)));
+          List<ChildNumber> internalPath = Lists.newArrayList(rootNodePath);
+            internalPath.add(new ChildNumber(1));
+            internalPath.add(new ChildNumber(activeChain.getIssuedInternalKeys() - 1));
+
+            log.debug("internalPath: " + internalPath.toString());
+            DeterministicKey currentInternalKey = activeChain.getKeyByPath(ImmutableList.copyOf(internalPath));
+
             currentKeys.put(KeyChain.KeyPurpose.CHANGE, currentInternalKey);
         }
         return currentKeys;

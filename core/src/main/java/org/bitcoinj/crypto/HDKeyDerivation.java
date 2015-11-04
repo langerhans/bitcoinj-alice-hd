@@ -16,22 +16,31 @@
 
 package org.bitcoinj.crypto;
 
-import com.google.common.collect.*;
-import org.bitcoinj.core.*;
-import org.spongycastle.math.ec.*;
+import com.google.common.collect.ImmutableList;
+import org.bitcoinj.core.ECKey;
+import org.bitcoinj.core.Utils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.spongycastle.crypto.macs.HMac;
+import org.spongycastle.math.ec.ECPoint;
 
-import java.math.*;
-import java.nio.*;
-import java.security.*;
-import java.util.*;
+import java.math.BigInteger;
+import java.nio.ByteBuffer;
+import java.security.SecureRandom;
+import java.util.ArrayList;
+import java.util.Arrays;
 
-import static com.google.common.base.Preconditions.*;
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkState;
 
 /**
  * Implementation of the <a href="https://github.com/bitcoin/bips/blob/master/bip-0032.mediawiki">BIP 32</a>
  * deterministic wallet child key generation algorithm.
  */
 public final class HDKeyDerivation {
+
+    private static final Logger log = LoggerFactory.getLogger(HDKeyDerivation.class);
+
     static {
         // Init proper random number generator, as some old Android installations have bugs that make it unsecure.
         if (Utils.isAndroidRuntime())
@@ -51,6 +60,8 @@ public final class HDKeyDerivation {
      */
     public static final int MAX_CHILD_DERIVATION_ATTEMPTS = 100;
 
+    public static final HMac MASTER_HMAC_SHA512 = HDUtils.createHmacSha512Digest("Bitcoin seed".getBytes());
+
     /**
      * Generates a new deterministic key from the given seed, which can be any arbitrary byte array. However resist
      * the temptation to use a string as the seed - any key derived from a password is likely to be weak and easily
@@ -63,7 +74,7 @@ public final class HDKeyDerivation {
     public static DeterministicKey createMasterPrivateKey(byte[] seed) throws HDDerivationException {
         checkArgument(seed.length > 8, "Seed is too short and could be brute forced");
         // Calculate I = HMAC-SHA512(key="Bitcoin seed", msg=S)
-        byte[] i = HDUtils.hmacSha512(HDUtils.createHmacSha512Digest("Bitcoin seed".getBytes()), seed);
+        byte[] i = HDUtils.hmacSha512(MASTER_HMAC_SHA512, seed);
         // Split I into two 32-byte sequences, Il and Ir.
         // Use Il as master secret key, and Ir as master chain code.
         checkState(i.length == 64, i.length);
@@ -78,6 +89,54 @@ public final class HDKeyDerivation {
         return masterPrivKey;
     }
 
+  // ALICE
+  public static DeterministicKey createMasterPrivateKey(ImmutableList<ChildNumber> rootNodeList, byte[] seed) throws HDDerivationException {
+       checkArgument(seed.length > 8, "Seed is too short and could be brute forced");
+       // Calculate I = HMAC-SHA512(key="Bitcoin seed", msg=S)
+       byte[] i = HDUtils.hmacSha512(MASTER_HMAC_SHA512, seed);
+       // Split I into two 32-byte sequences, Il and Ir.
+       // Use Il as master secret key, and Ir as master chain code.
+       checkState(i.length == 64, i.length);
+       byte[] il = Arrays.copyOfRange(i, 0, 32);
+       byte[] ir = Arrays.copyOfRange(i, 32, 64);
+       Arrays.fill(i, (byte)0);
+       DeterministicKey masterPrivKey = createMasterPrivKeyFromBytes(rootNodeList, il, ir);
+       Arrays.fill(il, (byte)0);
+       Arrays.fill(ir, (byte)0);
+       // Child deterministic keys will chain up to their parents to find the keys.
+       masterPrivKey.setCreationTimeSeconds(Utils.currentTimeSeconds());
+
+       return masterPrivKey;
+   }
+
+   // ALICE
+  public static DeterministicKey createRootNodeWithPrivateKey(ImmutableList<ChildNumber> rootNodeList, byte[] seed) throws HDDerivationException {
+       checkArgument(seed.length > 8, "Seed is too short and could be brute forced");
+       // Calculate I = HMAC-SHA512(key="Bitcoin seed", msg=S)
+       byte[] i = HDUtils.hmacSha512(MASTER_HMAC_SHA512, seed);
+       // Split I into two 32-byte sequences, Il and Ir.
+       // Use Il as master secret key, and Ir as master chain code.
+       checkState(i.length == 64, i.length);
+       byte[] il = Arrays.copyOfRange(i, 0, 32);
+       byte[] ir = Arrays.copyOfRange(i, 32, 64);
+       Arrays.fill(i, (byte)0);
+       DeterministicKey masterPrivKey = createMasterPrivKeyFromBytes(ImmutableList.copyOf(new ArrayList<ChildNumber>()), il, ir);
+       Arrays.fill(il, (byte)0);
+       Arrays.fill(ir, (byte)0);
+       // Child deterministic keys will chain up to their parents to find the keys.
+       masterPrivKey.setCreationTimeSeconds(Utils.currentTimeSeconds());
+       log.debug("masterPrivKey = " + masterPrivKey);
+
+       // The masterPrivateKey generated is the very top node in a hierarchy
+       // Generate the key that matches the rootNodeList passed in
+       DeterministicKey childKey = masterPrivKey;
+       for (ChildNumber childNumber : rootNodeList) {
+         childKey= HDKeyDerivation.deriveChildKey(childKey, childNumber);
+         log.debug("childKey = " + childKey);
+       }
+       return childKey;
+   }
+
     /**
      * @throws HDDerivationException if privKeyBytes is invalid (0 or >= n).
      */
@@ -87,6 +146,14 @@ public final class HDKeyDerivation {
         assertLessThanN(priv, "Generated master key is invalid.");
         return new DeterministicKey(ImmutableList.<ChildNumber>of(), chainCode, priv, null);
     }
+
+    // ALICE
+    public static DeterministicKey createMasterPrivKeyFromBytes(ImmutableList<ChildNumber> rootNodeList, byte[] privKeyBytes, byte[] chainCode) throws HDDerivationException {
+       BigInteger priv = new BigInteger(1, privKeyBytes);
+       assertNonZero(priv, "Generated master key is invalid.");
+       assertLessThanN(priv, "Generated master key is invalid.");
+       return new DeterministicKey(rootNodeList, chainCode, priv, null);
+   }
 
     public static DeterministicKey createMasterPubKeyFromBytes(byte[] pubKeyBytes, byte[] chainCode) {
         return new DeterministicKey(ImmutableList.<ChildNumber>of(), chainCode, new LazyECPoint(ECKey.CURVE.getCurve(), pubKeyBytes), null, null);

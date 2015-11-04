@@ -16,12 +16,16 @@
 
 package org.bitcoinj.wallet;
 
+import com.google.common.collect.ImmutableList;
 import org.bitcoinj.core.*;
-import org.bitcoinj.crypto.*;
+import org.bitcoinj.crypto.DeterministicKey;
+import org.bitcoinj.crypto.KeyCrypterException;
+import org.bitcoinj.crypto.KeyCrypterScrypt;
+import org.bitcoinj.crypto.MnemonicCode;
 import org.bitcoinj.params.MainNetParams;
 import org.bitcoinj.utils.BriefLogFormatter;
 import org.bitcoinj.utils.Threading;
-import com.google.common.collect.ImmutableList;
+
 import org.junit.Before;
 import org.junit.Test;
 import org.spongycastle.crypto.params.KeyParameter;
@@ -408,27 +412,39 @@ public class KeyChainGroupTest {
 
     @Test
     public void serialization() throws Exception {
-        int initialKeys = INITIAL_KEYS + group.getActiveKeyChain().getAccountPath().size() - 1;
-        assertEquals(initialKeys + 1 /* for the seed */, group.serializeToProtobuf().size());
+
+        System.out.println("KeyChainGroupTest#serialisation group:" + group.getActiveKeyChain().getKeys(true).toString());
+        assertEquals(INITIAL_KEYS + 1 /* for the seed */, group.serializeToProtobuf().size());
+
         group = KeyChainGroup.fromProtobufUnencrypted(params, group.serializeToProtobuf());
         group.freshKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
         DeterministicKey key1 = group.freshKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
         DeterministicKey key2 = group.freshKey(KeyChain.KeyPurpose.CHANGE);
         group.getBloomFilterElementCount();
         List<Protos.Key> protoKeys1 = group.serializeToProtobuf();
-        assertEquals(initialKeys + ((LOOKAHEAD_SIZE + 1) * 2) + 1 /* for the seed */ + 1, protoKeys1.size());
+
+        assertEquals(INITIAL_KEYS + ((LOOKAHEAD_SIZE + 2) * 2) + 1 /* for the seed */ + 1, protoKeys1.size());
         group.importKeys(new ECKey());
         List<Protos.Key> protoKeys2 = group.serializeToProtobuf();
-        assertEquals(initialKeys + ((LOOKAHEAD_SIZE + 1) * 2) + 1 /* for the seed */ + 2, protoKeys2.size());
+        assertEquals(INITIAL_KEYS + ((LOOKAHEAD_SIZE + 2) * 2) + 1 /* for the seed */ + 2, protoKeys2.size());
 
         group = KeyChainGroup.fromProtobufUnencrypted(params, protoKeys1);
-        assertEquals(initialKeys + ((LOOKAHEAD_SIZE + 1)  * 2)  + 1 /* for the seed */ + 1, protoKeys1.size());
+        assertEquals(INITIAL_KEYS + ((LOOKAHEAD_SIZE + 2)  * 2)  + 1 /* for the seed */ + 1, protoKeys1.size());
+
         assertTrue(group.hasKey(key1));
         assertTrue(group.hasKey(key2));
-        assertEquals(key2, group.currentKey(KeyChain.KeyPurpose.CHANGE));
-        assertEquals(key1, group.currentKey(KeyChain.KeyPurpose.RECEIVE_FUNDS));
+        // Reborn keys have a birthdate - do not compare these
+        DeterministicKey key1reborn = group.currentKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
+        key1reborn.setCreationTimeSeconds(0);
+        DeterministicKey key2reborn = group.currentKey(KeyChain.KeyPurpose.CHANGE);
+        key2reborn.setCreationTimeSeconds(0);
+
+        assertEquals(key2, key2reborn);
+        assertEquals(key1, key1reborn);
         group = KeyChainGroup.fromProtobufUnencrypted(params, protoKeys2);
-        assertEquals(initialKeys + ((LOOKAHEAD_SIZE + 1) * 2) + 1 /* for the seed */ + 2, protoKeys2.size());
+
+        assertEquals(INITIAL_KEYS + ((LOOKAHEAD_SIZE + 2) * 2) + 1 /* for the seed */ + 2, protoKeys2.size());
+
         assertTrue(group.hasKey(key1));
         assertTrue(group.hasKey(key2));
 
@@ -484,6 +500,9 @@ public class KeyChainGroupTest {
         ECKey key1 = group.freshKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
         final DeterministicSeed seed = checkNotNull(group.getActiveKeyChain().getSeed());
         KeyChainGroup group2 = new KeyChainGroup(params, seed);
+        final DeterministicSeed rebornSeed = group2.getActiveKeyChain().getSeed();
+        assertEquals(seed, rebornSeed);
+
         group2.setLookaheadSize(5);
         ECKey key2 = group2.freshKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
         assertEquals(key1, key2);

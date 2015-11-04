@@ -773,7 +773,7 @@ public class PeerGroupTest extends TestWithPeerGroup {
 
         peerGroup.start();
         InboundMessageQueuer p1 = connectPeer(1);
-        assertTrue(p1.lastReceivedFilter.contains(keys.get(0).getPubKey()));
+        assertTrue(p1.lastReceivedFilter.contains(keys.get(1).getPubKey()));
         assertTrue(p1.lastReceivedFilter.contains(keys.get(5).getPubKeyHash()));
         assertFalse(p1.lastReceivedFilter.contains(keys.get(keys.size() - 1).getPubKey()));
         peerGroup.startBlockChainDownload(null);

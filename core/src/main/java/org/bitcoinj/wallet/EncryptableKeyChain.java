@@ -16,6 +16,8 @@
 
 package org.bitcoinj.wallet;
 
+import com.google.common.collect.ImmutableList;
+import org.bitcoinj.crypto.ChildNumber;
 import org.bitcoinj.crypto.KeyCrypter;
 import org.bitcoinj.crypto.KeyCrypterException;
 import org.spongycastle.crypto.params.KeyParameter;
@@ -35,13 +37,20 @@ public interface EncryptableKeyChain extends KeyChain {
      */
     EncryptableKeyChain toEncrypted(CharSequence password);
 
-    /**
+  /**
      * Returns a new keychain holding identical/cloned keys to this chain, but encrypted under the given key.
      * Old keys and keychains remain valid and so you should ensure you don't accidentally hold references to them.
      */
     EncryptableKeyChain toEncrypted(KeyCrypter keyCrypter, KeyParameter aesKey);
 
-    /**
+  /**
+   * ALICE
+     * Returns a new keychain holding identical/cloned keys to this chain, but encrypted under the given key.
+     * Old keys and keychains remain valid and so you should ensure you don't accidentally hold references to them.
+     */
+    public EncryptableKeyChain toEncrypted(KeyCrypter keyCrypter, KeyParameter aesKey, ImmutableList<ChildNumber> rootPathNode);
+
+     /**
      * Decrypts the key chain with the given password. See {@link #toDecrypted(org.spongycastle.crypto.params.KeyParameter)}
      * for details.
      */

@@ -76,10 +76,10 @@ public class Context {
             if (lastConstructed == null)
                 throw new IllegalStateException("You must construct a Context object before using bitcoinj!");
             slot.set(lastConstructed);
-            log.error("Performing thread fixup: you are accessing bitcoinj via a thread that has not had any context set on it.");
-            log.error("This error has been corrected for, but doing this makes your app less robust.");
-            log.error("You should use Context.propagate() or a ContextPropagatingThreadFactory.");
-            log.error("Please refer to the user guide for more information about this.");
+            log.info("Performing thread fixup: you are accessing bitcoinj via a thread that has not had any context set on it.");
+            log.info("This error has been corrected for, but doing this makes your app less robust.");
+            log.info("You should use Context.propagate() or a ContextPropagatingThreadFactory.");
+            log.info("Please refer to the user guide for more information about this.");
             // TODO: Actually write the user guide section about this.
             // TODO: If the above TODO makes it past the 0.13 release, kick Mike and tell him he sucks.
             return lastConstructed;

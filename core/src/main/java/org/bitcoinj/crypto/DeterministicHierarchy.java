@@ -18,6 +18,8 @@ package org.bitcoinj.crypto;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Maps;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
 import java.util.List;
@@ -41,6 +43,8 @@ import static com.google.common.base.Preconditions.checkArgument;
  * is a list of {@link ChildNumber}s.</p>
  */
 public class DeterministicHierarchy implements Serializable {
+    private static final Logger log = LoggerFactory.getLogger(DeterministicHierarchy.class);
+
     private final Map<ImmutableList<ChildNumber>, DeterministicKey> keys = Maps.newHashMap();
     private final ImmutableList<ChildNumber> rootPath;
     // Keep track of how many child keys each node has. This is kind of weak.
@@ -55,6 +59,7 @@ public class DeterministicHierarchy implements Serializable {
     public DeterministicHierarchy(DeterministicKey rootKey) {
         putKey(rootKey);
         rootPath = rootKey.getPath();
+        log.debug("DeterministicHierarchy created with rootPath:" + rootPath);
     }
 
     /**

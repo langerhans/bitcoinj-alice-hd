@@ -14,22 +14,26 @@
 
 package org.bitcoinj.protocols.payments;
 
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.ListeningExecutorService;
+import com.google.protobuf.InvalidProtocolBufferException;
+import org.bitcoin.protocols.payments.Protos;
 import org.bitcoinj.core.*;
 import org.bitcoinj.crypto.TrustStoreLoader;
 import org.bitcoinj.params.MainNetParams;
 import org.bitcoinj.protocols.payments.PaymentProtocol.PkiVerificationData;
 import org.bitcoinj.uri.BitcoinURI;
 import org.bitcoinj.utils.Threading;
-import com.google.common.annotations.VisibleForTesting;
-import com.google.common.util.concurrent.ListenableFuture;
-import com.google.common.util.concurrent.ListeningExecutorService;
-import com.google.protobuf.InvalidProtocolBufferException;
-
-import org.bitcoin.protocols.payments.Protos;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
-
-import java.io.*;
+import javax.net.ssl.HostnameVerifier;
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLSession;
+import java.io.DataOutputStream;
+import java.io.IOException;
 import java.net.*;
 import java.security.KeyStoreException;
 import java.util.ArrayList;
@@ -65,6 +69,8 @@ import java.util.concurrent.Callable;
  * @see <a href="https://github.com/bitcoin/bips/blob/master/bip-0070.mediawiki">BIP 0070</a>
  */
 public class PaymentSession {
+    private static final Logger log = LoggerFactory.getLogger(PaymentSession.class);
+
     private static ListeningExecutorService executor = Threading.THREAD_POOL;
     private NetworkParameters params;
     private Protos.PaymentRequest paymentRequest;
@@ -354,7 +360,11 @@ public class PaymentSession {
         return executor.submit(new Callable<PaymentProtocol.Ack>() {
             @Override
             public PaymentProtocol.Ack call() throws Exception {
+
+                HttpURLConnection connectionToUse;
+
                 HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+                connectionToUse = connection;
                 connection.setRequestMethod("POST");
                 connection.setRequestProperty("Content-Type", PaymentProtocol.MIMETYPE_PAYMENT);
                 connection.setRequestProperty("Accept", PaymentProtocol.MIMETYPE_PAYMENTACK);
@@ -363,14 +373,34 @@ public class PaymentSession {
                 connection.setDoInput(true);
                 connection.setDoOutput(true);
 
+                // ALICE - Allow sending to localhost even if the SSL cert is incompatible - for testing.
+                if (connection instanceof HttpsURLConnection && "localhost".equals(url.getHost())) {
+                    log.debug("Allowing all SSL connections to 'localhost'");
+                    HttpsURLConnection conn1 = (HttpsURLConnection) url.openConnection();
+                    conn1.setHostnameVerifier(new HostnameVerifier() {
+                        public boolean verify(String hostname, SSLSession session) {
+                            return true;
+                        }
+                    });
+                    connectionToUse = conn1;
+
+                    conn1.setRequestMethod("POST");
+                    conn1.setRequestProperty("Content-Type", PaymentProtocol.MIMETYPE_PAYMENT);
+                    conn1.setRequestProperty("Accept", PaymentProtocol.MIMETYPE_PAYMENTACK);
+                    conn1.setRequestProperty("Content-Length", Integer.toString(payment.getSerializedSize()));
+                    conn1.setUseCaches(false);
+                    conn1.setDoInput(true);
+                    conn1.setDoOutput(true);
+                }
+
                 // Send request.
-                DataOutputStream outStream = new DataOutputStream(connection.getOutputStream());
+                DataOutputStream outStream = new DataOutputStream(connectionToUse.getOutputStream());
                 payment.writeTo(outStream);
                 outStream.flush();
                 outStream.close();
 
                 // Get response.
-                Protos.PaymentACK paymentAck = Protos.PaymentACK.parseFrom(connection.getInputStream());
+                Protos.PaymentACK paymentAck = Protos.PaymentACK.parseFrom(connectionToUse.getInputStream());
                 return PaymentProtocol.parsePaymentAck(paymentAck);
             }
         });

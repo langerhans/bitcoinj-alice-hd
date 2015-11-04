@@ -89,7 +89,7 @@ public class TxConfidenceTable {
      * which bothered to keep a reference. Typically, this is because the transaction does not involve any keys that
      * are relevant to any of our wallets.
      */
-    private void cleanTable() {
+    public void cleanTable() {
         lock.lock();
         try {
             Reference<? extends TransactionConfidence> ref;
@@ -99,6 +99,18 @@ public class TxConfidenceTable {
                 // And remove the associated map entry so the other bits of memory can also be reclaimed.
                 table.remove(txRef.hash);
             }
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * Reset the state of the mempool i.e. forget everything
+     */
+    public void reset() {
+        lock.lock();
+        try {
+            table.clear();
         } finally {
             lock.unlock();
         }

@@ -101,6 +101,7 @@ public class PaymentChannelClientConnection {
             throws IOException, ValueOutOfRangeException {
         // Glue the object which vends/ingests protobuf messages in order to manage state to the network object which
         // reads/writes them to the wire in length prefixed form.
+
         channelClient = new PaymentChannelClient(wallet, myKey, maxValue, Sha256Hash.of(serverId.getBytes()), timeWindow,
                 userKeySetup, new PaymentChannelClient.ClientConnection() {
             @Override
@@ -162,6 +163,7 @@ public class PaymentChannelClientConnection {
      * an error before the channel has reached the open state.</p>
      *
      * <p>After this future completes successfully, you may call
+
      * {@link PaymentChannelClientConnection#incrementPayment(Coin)} or
      * {@link PaymentChannelClientConnection#incrementPayment(Coin, com.google.protobuf.ByteString, KeyParameter)} to
      * begin paying the server.</p>

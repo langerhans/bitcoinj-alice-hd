@@ -232,7 +232,9 @@ class ConnectionHandler implements MessageWriteTarget {
             // This can happen eg if the channel closes while the thread is about to get killed
             // (ClosedByInterruptException), or if handler.parser.receiveBytes throws something
             Throwable t = Throwables.getRootCause(e);
+
             log.warn("Error handling SelectionKey: {}", t.getMessage() != null ? t.getMessage() : t.getClass().getName());
+
             handler.closeConnection();
         }
     }

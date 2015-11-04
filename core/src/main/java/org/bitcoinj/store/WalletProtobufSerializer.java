@@ -619,8 +619,20 @@ public class WalletProtobufSerializer {
         Sha256Hash protoHash = byteStringToHash(txProto.getHash());
         if (!tx.getHash().equals(protoHash))
             throw new UnreadableWalletException(String.format("Transaction did not deserialize completely: %s vs %s", tx.getHash(), protoHash));
-        if (txMap.containsKey(txProto.getHash()))
-            throw new UnreadableWalletException("Wallet contained duplicate transaction " + byteStringToHash(txProto.getHash()));
+
+        // ALICE
+        // If it is a duplicate, keep the newer.
+        // (This code is is here because some old MultiBit serialised wallets had the same tx appearing twice and the wallets would not load).
+        if (txMap.containsKey(txProto.getHash())) {
+            Transaction txExisting = txMap.get(txProto.getHash());
+            if (txExisting.getUpdateTime().after(new Date(txProto.getUpdatedAt()))) {
+                // Existing transaction is newer. Keep it.
+                log.debug("Wallet contained duplicate transaction %s, keeping the first and newer one", byteStringToHash(txProto.getHash()));
+                return;
+            } else {
+                log.debug("Wallet contained duplicate transaction %s, using the second and newer one", byteStringToHash(txProto.getHash()));
+            }
+        }
         txMap.put(txProto.getHash(), tx);
     }
 

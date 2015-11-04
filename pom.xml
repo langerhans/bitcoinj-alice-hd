@@ -4,14 +4,11 @@
 
   <groupId>org.bitcoinj</groupId>
   <artifactId>bitcoinj-parent</artifactId>
-  <version>0.13.3</version>
+  <version>0.13.3-alice-0.1.5</version>
   <packaging>pom</packaging>
 
   <modules>
     <module>core</module>
-    <module>examples</module>
-    <module>tools</module>
-    <module>wallettemplate</module>
   </modules>
 
   <parent>
