@@ -29,7 +29,7 @@ public class Context {
 
     private TxConfidenceTable confidenceTable;
     private NetworkParameters params;
-    private int eventHorizon = 100;
+    private int eventHorizon = Integer.MAX_VALUE;
 
     /**
      * Creates a new context object. For now, this will be done for you by the framework. Eventually you will be
