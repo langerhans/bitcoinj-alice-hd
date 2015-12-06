@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright 2011 Google Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,8 +18,8 @@ package org.bitcoinj.core;
 
 import org.bitcoinj.store.BlockStore;
 import org.bitcoinj.store.BlockStoreException;
+import com.google.common.base.Objects;
 
-import java.io.*;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
 
@@ -34,8 +34,7 @@ import static com.google.common.base.Preconditions.checkState;
  *
  * StoredBlocks are put inside a {@link BlockStore} which saves them to memory or disk.
  */
-public class StoredBlock implements Serializable {
-    private static final long serialVersionUID = -6097565241243701771L;
+public class StoredBlock {
 
     // A BigInteger representing the total amount of work done so far on this chain. As of May 2011 it takes 8
     // bytes to represent this field, so 12 bytes should be plenty for now.
@@ -86,15 +85,12 @@ public class StoredBlock implements Serializable {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         StoredBlock other = (StoredBlock) o;
-        return header.equals(other.header) &&
-               chainWork.equals(other.chainWork) &&
-               height == other.height;
+        return header.equals(other.header) && chainWork.equals(other.chainWork) && height == other.height;
     }
 
     @Override
     public int hashCode() {
-        // A better hashCode is possible, but this works for now.
-        return header.hashCode() ^ chainWork.hashCode() ^ height;
+        return Objects.hashCode(header, chainWork, height);
     }
 
     /**
@@ -142,7 +138,7 @@ public class StoredBlock implements Serializable {
         int height = buffer.getInt();  // +4 bytes
         byte[] header = new byte[Block.HEADER_SIZE + 1];    // Extra byte for the 00 transactions length.
         buffer.get(header, 0, Block.HEADER_SIZE);
-        return new StoredBlock(new Block(params, header), chainWork, height);
+        return new StoredBlock(params.getDefaultSerializer().makeBlock(header), chainWork, height);
     }
 
     @Override

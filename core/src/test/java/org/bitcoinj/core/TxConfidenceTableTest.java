@@ -45,24 +45,24 @@ public class TxConfidenceTableTest {
         tx2 = FakeTxBuilder.createFakeTxWithChangeAddress(params, COIN, to, change);
         assertEquals(tx1.getHash(), tx2.getHash());
 
-        address1 = new PeerAddress(InetAddress.getByAddress(new byte[] { 127, 0, 0, 1 }));
-        address2 = new PeerAddress(InetAddress.getByAddress(new byte[] { 127, 0, 0, 2 }));
-        address3 = new PeerAddress(InetAddress.getByAddress(new byte[] { 127, 0, 0, 3 }));
+        address1 = new PeerAddress(params, InetAddress.getByAddress(new byte[] { 127, 0, 0, 1 }));
+        address2 = new PeerAddress(params, InetAddress.getByAddress(new byte[] { 127, 0, 0, 2 }));
+        address3 = new PeerAddress(params, InetAddress.getByAddress(new byte[] { 127, 0, 0, 3 }));
     }
 
     @Test
     public void pinHandlers() throws Exception {
-        Transaction tx = new Transaction(params, tx1.bitcoinSerialize());
+        Transaction tx = params.getDefaultSerializer().makeTransaction(tx1.bitcoinSerialize());
         Sha256Hash hash = tx.getHash();
         table.seen(hash, address1);
         assertEquals(1, tx.getConfidence().numBroadcastPeers());
         final int[] seen = new int[1];
-        tx.getConfidence().addEventListener(new TransactionConfidence.Listener() {
+        tx.getConfidence().addEventListener(Threading.SAME_THREAD, new TransactionConfidence.Listener() {
             @Override
             public void onConfidenceChanged(TransactionConfidence confidence, ChangeReason reason) {
                 seen[0] = confidence.numBroadcastPeers();
             }
-        }, Threading.SAME_THREAD);
+        });
         tx = null;
         System.gc();
         table.seen(hash, address2);
@@ -72,12 +72,12 @@ public class TxConfidenceTableTest {
     @Test
     public void events() throws Exception {
         final TransactionConfidence.Listener.ChangeReason[] run = new TransactionConfidence.Listener.ChangeReason[1];
-        tx1.getConfidence().addEventListener(new TransactionConfidence.Listener() {
+        tx1.getConfidence().addEventListener(Threading.SAME_THREAD, new TransactionConfidence.Listener() {
             @Override
             public void onConfidenceChanged(TransactionConfidence confidence, ChangeReason reason) {
                 run[0] = reason;
             }
-        }, Threading.SAME_THREAD);
+        });
         table.seen(tx1.getHash(), address1);
         assertEquals(TransactionConfidence.Listener.ChangeReason.SEEN_PEERS, run[0]);
         run[0] = null;

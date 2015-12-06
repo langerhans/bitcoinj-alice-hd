@@ -16,6 +16,7 @@
 
 package org.bitcoinj.protocols.channels;
 
+import com.google.common.collect.ImmutableMap;
 import org.bitcoinj.core.*;
 import org.bitcoinj.utils.Threading;
 import com.google.common.annotations.VisibleForTesting;
@@ -150,6 +151,18 @@ public class StoredPaymentChannelServerStates implements WalletExtension {
     }
 
     /**
+     * Get a copy of all {@link StoredServerChannel}s
+     */
+    public Map<Sha256Hash, StoredServerChannel> getChannelMap() {
+        lock.lock();
+        try {
+            return ImmutableMap.copyOf(mapChannels);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
      * Notifies the set of stored states that a channel has been updated. Use to notify the wallet of an update to this
      * wallet extension.
      */
@@ -232,7 +245,7 @@ public class StoredPaymentChannelServerStates implements WalletExtension {
             NetworkParameters params = containingWallet.getParams();
             for (ServerState.StoredServerPaymentChannel storedState : states.getChannelsList()) {
                 StoredServerChannel channel = new StoredServerChannel(null,
-                        new Transaction(params, storedState.getContractTransaction().toByteArray()),
+                        params.getDefaultSerializer().makeTransaction(storedState.getContractTransaction().toByteArray()),
                         new TransactionOutput(params, null, storedState.getClientOutput().toByteArray(), 0),
                         storedState.getRefundTransactionUnlockTimeSecs(),
                         ECKey.fromPrivate(storedState.getMyKey().toByteArray()),

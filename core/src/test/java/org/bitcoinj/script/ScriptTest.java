@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright 2011 Google Inc.
  * Copyright 2014 Andreas Schildbach
  *
@@ -46,6 +46,7 @@ import static org.bitcoinj.script.ScriptOpCodes.OP_0;
 import static org.bitcoinj.script.ScriptOpCodes.OP_INVALIDOPCODE;
 import static org.hamcrest.core.IsEqual.equalTo;
 import static org.junit.Assert.*;
+import org.junit.Before;
 
 public class ScriptTest {
     // From tx 05e04c26c12fe408a3c1b71aa7996403f6acad1045252b1c62e055496f4d2cb1 on the testnet.
@@ -57,6 +58,11 @@ public class ScriptTest {
     static final NetworkParameters params = TestNet3Params.get();
 
     private static final Logger log = LoggerFactory.getLogger(ScriptTest.class);
+
+    @Before
+    public void setUp() throws Exception {
+        Context context = new Context(params);
+    }
 
     @Test
     public void testScriptSig() throws Exception {
@@ -106,7 +112,7 @@ public class ScriptTest {
 
     @Test
     public void testP2SHOutputScript() throws Exception {
-        Address p2shAddress = new Address(MainNetParams.get(), "35b9vsyH1KoFT5a5KtrKusaCcPLkiSo1tU");
+        Address p2shAddress = Address.fromBase58(MainNetParams.get(), "35b9vsyH1KoFT5a5KtrKusaCcPLkiSo1tU");
         assertTrue(ScriptBuilder.createOutputScript(p2shAddress).isPayToScriptHash());
     }
 
@@ -118,17 +124,17 @@ public class ScriptTest {
     }
     
     @Test
-    public void testCreateMultiSigInputScript() throws AddressFormatException {
+    public void testCreateMultiSigInputScript() {
         // Setup transaction and signatures
-        ECKey key1 = new DumpedPrivateKey(params, "cVLwRLTvz3BxDAWkvS3yzT9pUcTCup7kQnfT2smRjvmmm1wAP6QT").getKey();
-        ECKey key2 = new DumpedPrivateKey(params, "cTine92s8GLpVqvebi8rYce3FrUYq78ZGQffBYCS1HmDPJdSTxUo").getKey();
-        ECKey key3 = new DumpedPrivateKey(params, "cVHwXSPRZmL9adctwBwmn4oTZdZMbaCsR5XF6VznqMgcvt1FDDxg").getKey();
+        ECKey key1 = DumpedPrivateKey.fromBase58(params, "cVLwRLTvz3BxDAWkvS3yzT9pUcTCup7kQnfT2smRjvmmm1wAP6QT").getKey();
+        ECKey key2 = DumpedPrivateKey.fromBase58(params, "cTine92s8GLpVqvebi8rYce3FrUYq78ZGQffBYCS1HmDPJdSTxUo").getKey();
+        ECKey key3 = DumpedPrivateKey.fromBase58(params, "cVHwXSPRZmL9adctwBwmn4oTZdZMbaCsR5XF6VznqMgcvt1FDDxg").getKey();
         Script multisigScript = ScriptBuilder.createMultiSigOutputScript(2, Arrays.asList(key1, key2, key3));
         byte[] bytes = HEX.decode("01000000013df681ff83b43b6585fa32dd0e12b0b502e6481e04ee52ff0fdaf55a16a4ef61000000006b483045022100a84acca7906c13c5895a1314c165d33621cdcf8696145080895cbf301119b7cf0220730ff511106aa0e0a8570ff00ee57d7a6f24e30f592a10cae1deffac9e13b990012102b8d567bcd6328fd48a429f9cf4b315b859a58fd28c5088ef3cb1d98125fc4e8dffffffff02364f1c00000000001976a91439a02793b418de8ec748dd75382656453dc99bcb88ac40420f000000000017a9145780b80be32e117f675d6e0ada13ba799bf248e98700000000");
-        Transaction transaction = new Transaction(params, bytes);
+        Transaction transaction = params.getDefaultSerializer().makeTransaction(bytes);
         TransactionOutput output = transaction.getOutput(1);
         Transaction spendTx = new Transaction(params);
-        Address address = new Address(params, "n3CFiCmBXVt5d3HXKQ15EFZyhPz4yj5F3H");
+        Address address = Address.fromBase58(params, "n3CFiCmBXVt5d3HXKQ15EFZyhPz4yj5F3H");
         Script outputScript = ScriptBuilder.createOutputScript(address);
         spendTx.addOutput(output.getValue(), outputScript);
         spendTx.addInput(output);
@@ -213,6 +219,18 @@ public class ScriptTest {
         } catch (Exception e) {
             assertEquals(IllegalArgumentException.class, e.getClass());
         }
+    }
+
+    @Test
+    public void testOp0() {
+        // Check that OP_0 doesn't NPE and pushes an empty stack frame.
+        Transaction tx = new Transaction(params);
+        tx.addInput(new TransactionInput(params, tx, new byte[] {}));
+        Script script = new ScriptBuilder().smallNum(0).build();
+
+        LinkedList<byte[]> stack = new LinkedList<byte[]>();
+        Script.executeScript(tx, 0, script, stack, Script.ALL_VERIFY_FLAGS);
+        assertEquals("OP_0 push length", 0, stack.get(0).length);
     }
 
     private Script parseScriptString(String string) throws IOException {
@@ -324,7 +342,7 @@ public class ScriptTest {
             Transaction transaction = null;
             try {
                 Map<TransactionOutPoint, Script> scriptPubKeys = parseScriptPubKeys(test.get(0));
-                transaction = new Transaction(params, HEX.decode(test.get(1).asText().toLowerCase()));
+                transaction = params.getDefaultSerializer().makeTransaction(HEX.decode(test.get(1).asText().toLowerCase()));
                 transaction.verify();
                 Set<VerifyFlag> verifyFlags = parseVerifyFlags(test.get(2).asText());
 
@@ -353,7 +371,7 @@ public class ScriptTest {
             if (test.isArray() && test.size() == 1 && test.get(0).isTextual())
                 continue; // This is a comment.
             Map<TransactionOutPoint, Script> scriptPubKeys = parseScriptPubKeys(test.get(0));
-            Transaction transaction = new Transaction(params, HEX.decode(test.get(1).asText().toLowerCase()));
+            Transaction transaction = params.getDefaultSerializer().makeTransaction(HEX.decode(test.get(1).asText().toLowerCase()));
             Set<VerifyFlag> verifyFlags = parseVerifyFlags(test.get(2).asText());
 
             boolean valid = true;
@@ -363,7 +381,7 @@ public class ScriptTest {
                 valid = false;
             }
 
-            // The reference client checks this case in CheckTransaction, but we leave it to
+            // Bitcoin Core checks this case in CheckTransaction, but we leave it to
             // later where we will see an attempt to double-spend, so we explicitly check here
             HashSet<TransactionOutPoint> set = new HashSet<TransactionOutPoint>();
             for (TransactionInput input : transaction.getInputs()) {
@@ -405,5 +423,66 @@ public class ScriptTest {
     @Test(expected = ScriptException.class)
     public void getToAddressNoPubKey() throws Exception {
         ScriptBuilder.createOutputScript(new ECKey()).getToAddress(params, false);
+    }
+
+    /** Test encoding of zero, which should result in an opcode */
+    @Test
+    public void numberBuilderZero() {
+        final ScriptBuilder builder = new ScriptBuilder();
+
+        // 0 should encode directly to 0
+        builder.number(0);
+        assertArrayEquals(new byte[] {
+            0x00         // Pushed data
+        }, builder.build().getProgram());
+    }
+
+    @Test
+    public void numberBuilderPositiveOpCode() {
+        final ScriptBuilder builder = new ScriptBuilder();
+
+        builder.number(5);
+        assertArrayEquals(new byte[] {
+            0x55         // Pushed data
+        }, builder.build().getProgram());
+    }
+
+    @Test
+    public void numberBuilderBigNum() {
+        ScriptBuilder builder = new ScriptBuilder();
+        // 21066 should take up three bytes including the length byte
+        // at the start
+
+        builder.number(0x524a);
+        assertArrayEquals(new byte[] {
+            0x02,             // Length of the pushed data
+            0x4a, 0x52        // Pushed data
+        }, builder.build().getProgram());
+
+        // Test the trimming code ignores zeroes in the middle
+        builder = new ScriptBuilder();
+        builder.number(0x110011);
+        assertEquals(4, builder.build().getProgram().length);
+
+        // Check encoding of a value where signed/unsigned encoding differs
+        // because the most significant byte is 0x80, and therefore a
+        // sign byte has to be added to the end for the signed encoding.
+        builder = new ScriptBuilder();
+        builder.number(0x8000);
+        assertArrayEquals(new byte[] {
+            0x03,             // Length of the pushed data
+            0x00, (byte) 0x80, 0x00  // Pushed data
+        }, builder.build().getProgram());
+    }
+
+    @Test
+    public void numberBuilderNegative() {
+        // Check encoding of a negative value
+        final ScriptBuilder builder = new ScriptBuilder();
+        builder.number(-5);
+        assertArrayEquals(new byte[] {
+            0x01,        // Length of the pushed data
+            ((byte) 133) // Pushed data
+        }, builder.build().getProgram());
     }
 }

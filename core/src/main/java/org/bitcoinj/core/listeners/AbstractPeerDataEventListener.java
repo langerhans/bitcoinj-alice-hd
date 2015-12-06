@@ -14,20 +14,18 @@
  * limitations under the License.
  */
 
-package org.bitcoinj.core;
+package org.bitcoinj.core.listeners;
+
+import org.bitcoinj.core.*;
 
 import javax.annotation.*;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 
 /**
- * Convenience implementation of {@link PeerEventListener}.
+ * Deprecated: implement the more specific event listener interfaces instead to fill out only what you need
  */
-public class AbstractPeerEventListener implements PeerEventListener {
-    @Override
-    public void onPeersDiscovered(Set<PeerAddress> peerAddresses) {
-    }
-
+@Deprecated
+public abstract class AbstractPeerDataEventListener implements PeerDataEventListener {
     @Override
     public void onBlocksDownloaded(Peer peer, Block block, @Nullable FilteredBlock filteredBlock, int blocksLeft) {
     }
@@ -37,21 +35,9 @@ public class AbstractPeerEventListener implements PeerEventListener {
     }
 
     @Override
-    public void onPeerConnected(Peer peer, int peerCount) {
-    }
-
-    @Override
-    public void onPeerDisconnected(Peer peer, int peerCount) {
-    }
-
-    @Override
     public Message onPreMessageReceived(Peer peer, Message m) {
         // Just pass the message right through for further processing.
         return m;
-    }
-
-    @Override
-    public void onTransaction(Peer peer, Transaction t) {
     }
 
     @Override

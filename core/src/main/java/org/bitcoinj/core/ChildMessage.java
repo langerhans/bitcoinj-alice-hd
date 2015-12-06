@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright 2011 Steve Coughlan.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,10 +22,13 @@ import javax.annotation.Nullable;
  * backing byte array need to invalidate their parent's caches as well as their own if they are modified.
  */
 public abstract class ChildMessage extends Message {
-    private static final long serialVersionUID = -7657113383624517931L;
 
     @Nullable protected Message parent;
 
+    /**
+     * @deprecated Use {@link #ChildMessage(NetworkParameters) instead.
+     */
+    @Deprecated
     protected ChildMessage() {
     }
 
@@ -37,9 +40,8 @@ public abstract class ChildMessage extends Message {
         super(params, payload, offset, protocolVersion);
     }
 
-    public ChildMessage(NetworkParameters params, byte[] payload, int offset, int protocolVersion, Message parent, boolean parseLazy,
-                        boolean parseRetain, int length) throws ProtocolException {
-        super(params, payload, offset, protocolVersion, parseLazy, parseRetain, length);
+    public ChildMessage(NetworkParameters params, byte[] payload, int offset, int protocolVersion, Message parent, MessageSerializer setSerializer, int length) throws ProtocolException {
+        super(params, payload, offset, protocolVersion, setSerializer, length);
         this.parent = parent;
     }
 
@@ -47,9 +49,9 @@ public abstract class ChildMessage extends Message {
         super(params, payload, offset);
     }
 
-    public ChildMessage(NetworkParameters params, byte[] payload, int offset, @Nullable Message parent, boolean parseLazy, boolean parseRetain, int length)
+    public ChildMessage(NetworkParameters params, byte[] payload, int offset, @Nullable Message parent, MessageSerializer setSerializer, int length)
             throws ProtocolException {
-        super(params, payload, offset, parseLazy, parseRetain, length);
+        super(params, payload, offset, setSerializer, length);
         this.parent = parent;
     }
 

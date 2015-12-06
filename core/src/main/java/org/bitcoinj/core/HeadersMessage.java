@@ -1,5 +1,6 @@
 /*
  * Copyright 2011 Google Inc.
+ * Copyright 2015 Andreas Schildbach
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -62,34 +63,26 @@ public class HeadersMessage extends Message {
     }
 
     @Override
-    protected void parseLite() throws ProtocolException {
-        if (length == UNKNOWN_LENGTH) {
-            int saveCursor = cursor;
-            long numHeaders = readVarInt();
-            cursor = saveCursor;
-
-            // Each header has 80 bytes and one more byte for transactions number which is 00.
-            length = 81 * (int)numHeaders;
-        }
-    }
-
-    @Override
-    void parse() throws ProtocolException {
+    protected void parse() throws ProtocolException {
         long numHeaders = readVarInt();
         if (numHeaders > MAX_HEADERS)
             throw new ProtocolException("Too many headers: got " + numHeaders + " which is larger than " +
                                          MAX_HEADERS);
 
         blockHeaders = new ArrayList<Block>();
+        final BitcoinSerializer serializer = this.params.getSerializer(true);
 
         for (int i = 0; i < numHeaders; ++i) {
-            // Read 80 bytes of the header and one more byte for the transaction list, which is always a 00 because the
-            // transaction list is empty.
-            byte[] blockHeader = readBytes(81);
-            if (blockHeader[80] != 0)
+            final Block newBlockHeader = serializer.makeBlock(payload, cursor, UNKNOWN_LENGTH);
+            if (newBlockHeader.hasTransactions()) {
                 throw new ProtocolException("Block header does not end with a null byte");
-            Block newBlockHeader = new Block(this.params, blockHeader, true, true, 81);
+            }
+            cursor += newBlockHeader.optimalEncodingMessageSize;
             blockHeaders.add(newBlockHeader);
+        }
+
+        if (length == UNKNOWN_LENGTH) {
+            length = cursor - offset;
         }
 
         if (log.isDebugEnabled()) {
@@ -98,7 +91,6 @@ public class HeadersMessage extends Message {
             }
         }
     }
-
 
     public List<Block> getBlockHeaders() {
         return blockHeaders;

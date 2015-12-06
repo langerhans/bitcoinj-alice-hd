@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright 2013 Google Inc.
  * Copyright 2014 Andreas Schildbach
  *
@@ -17,6 +17,7 @@
 
 package org.bitcoinj.examples;
 
+import org.bitcoinj.core.listeners.AbstractWalletEventListener;
 import org.bitcoinj.core.*;
 import org.bitcoinj.crypto.KeyCrypterException;
 import org.bitcoinj.kits.WalletAppKit;
@@ -62,7 +63,7 @@ public class ForwardingService {
             filePrefix = "forwarding-service";
         }
         // Parse the address given as the first parameter.
-        forwardingAddress = new Address(params, args[0]);
+        forwardingAddress = Address.fromBase58(params, args[0]);
 
         // Start up a basic app using a class that automates some boilerplate.
         kit = new WalletAppKit(params, new File("."), filePrefix);

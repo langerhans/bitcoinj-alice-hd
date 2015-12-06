@@ -18,6 +18,7 @@
 package org.bitcoinj.core;
 
 import com.google.common.util.concurrent.Uninterruptibles;
+import org.bitcoinj.core.listeners.AbstractWalletEventListener;
 import org.bitcoinj.core.TransactionConfidence.ConfidenceType;
 import org.bitcoinj.params.UnitTestParams;
 import org.bitcoinj.store.MemoryBlockStore;
@@ -189,8 +190,8 @@ public class ChainSplitTest {
         wallet.commitTx(spend);
         // Waiting for confirmation ... make it eligible for selection.
         assertEquals(Coin.ZERO, wallet.getBalance());
-        spend.getConfidence().markBroadcastBy(new PeerAddress(InetAddress.getByAddress(new byte[]{1, 2, 3, 4})));
-        spend.getConfidence().markBroadcastBy(new PeerAddress(InetAddress.getByAddress(new byte[]{5,6,7,8})));
+        spend.getConfidence().markBroadcastBy(new PeerAddress(unitTestParams, InetAddress.getByAddress(new byte[]{1, 2, 3, 4})));
+        spend.getConfidence().markBroadcastBy(new PeerAddress(unitTestParams, InetAddress.getByAddress(new byte[]{5,6,7,8})));
         assertEquals(ConfidenceType.PENDING, spend.getConfidence().getConfidenceType());
         assertEquals(valueOf(40, 0), wallet.getBalance());
         Block b2 = b1.createNextBlock(someOtherGuy);
@@ -269,7 +270,7 @@ public class ChainSplitTest {
     }
 
     private Block roundtrip(Block b2) throws ProtocolException {
-        return new Block(unitTestParams, b2.bitcoinSerialize());
+        return unitTestParams.getDefaultSerializer().makeBlock(b2.bitcoinSerialize());
     }
 
     @Test
@@ -577,7 +578,7 @@ public class ChainSplitTest {
 
         Block b1 = unitTestParams.getGenesisBlock().createNextBlock(someOtherGuy);
         final ECKey coinsTo2 = wallet.freshReceiveKey();
-        Block b2 = b1.createNextBlockWithCoinbase(coinsTo2.getPubKey());
+        Block b2 = b1.createNextBlockWithCoinbase(Block.BLOCK_VERSION_GENESIS, coinsTo2.getPubKey(), 2);
         Block b3 = b2.createNextBlock(someOtherGuy);
 
         log.debug("Adding block b1");
@@ -612,12 +613,12 @@ public class ChainSplitTest {
         Transaction fodder = wallet.createSend(new ECKey().toAddress(unitTestParams), FIFTY_COINS);
         wallet.commitTx(fodder);
         final AtomicBoolean fodderIsDead = new AtomicBoolean(false);
-        fodder.getConfidence().addEventListener(new TransactionConfidence.Listener() {
+        fodder.getConfidence().addEventListener(Threading.SAME_THREAD, new TransactionConfidence.Listener() {
             @Override
             public void onConfidenceChanged(TransactionConfidence confidence, ChangeReason reason) {
                 fodderIsDead.set(confidence.getConfidenceType() == ConfidenceType.DEAD);
             }
-        }, Threading.SAME_THREAD);
+        });
 
         // Fork like this:
         //

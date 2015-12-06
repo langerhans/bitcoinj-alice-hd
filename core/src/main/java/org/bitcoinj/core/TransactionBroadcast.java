@@ -19,6 +19,9 @@ package org.bitcoinj.core;
 import com.google.common.annotations.*;
 import com.google.common.base.*;
 import com.google.common.util.concurrent.*;
+import org.bitcoinj.core.listeners.AbstractPeerDataEventListener;
+import org.bitcoinj.core.listeners.OnTransactionBroadcastListener;
+import org.bitcoinj.core.listeners.PeerDataEventListener;
 import org.bitcoinj.utils.*;
 import org.slf4j.*;
 
@@ -87,7 +90,7 @@ public class TransactionBroadcast {
         this.minConnections = minConnections;
     }
 
-    private PeerEventListener rejectionListener = new AbstractPeerEventListener() {
+    private PeerDataEventListener rejectionListener = new AbstractPeerDataEventListener() {
         @Override
         public Message onPreMessageReceived(Peer peer, Message m) {
             if (m instanceof RejectMessage) {
@@ -100,7 +103,7 @@ public class TransactionBroadcast {
                     if (size > threshold) {
                         log.warn("Threshold for considering broadcast rejected has been reached ({}/{})", size, threshold);
                         future.setException(new RejectedTransactionException(tx, rejectMessage));
-                        peerGroup.removeEventListener(this);
+                        peerGroup.removeDataEventListener(this);
                     }
                 }
             }
@@ -109,7 +112,7 @@ public class TransactionBroadcast {
     };
 
     public ListenableFuture<Transaction> broadcast() {
-        peerGroup.addEventListener(rejectionListener, Threading.SAME_THREAD);
+        peerGroup.addDataEventListener(Threading.SAME_THREAD, rejectionListener);
         log.debug("Waiting for {} peers required for broadcast, we have {} ...", minConnections, peerGroup.getConnectedPeers().size());
         peerGroup.waitForPeers(minConnections).addListener(new EnoughAvailablePeers(), Threading.SAME_THREAD);
         return future;
@@ -143,37 +146,7 @@ public class TransactionBroadcast {
                 log.debug("Context().get().getConfidenceTable(): {}", Context.get().getConfidenceTable());
                 log.debug("The transaction confidence from the table has identity: {}", System.identityHashCode(confidenceInTable));
 
-                peerGroup.addEventListener(new PeerEventListener() {
-                    @Override
-                    public void onPeersDiscovered(Set<PeerAddress> peerAddresses) {
-
-                    }
-
-                    @Override
-                    public void onBlocksDownloaded(Peer peer, Block block, @Nullable FilteredBlock filteredBlock, int blocksLeft) {
-
-                    }
-
-                    @Override
-                    public void onChainDownloadStarted(Peer peer, int blocksLeft) {
-
-                    }
-
-                    @Override
-                    public void onPeerConnected(Peer peer, int peerCount) {
-
-                    }
-
-                    @Override
-                    public void onPeerDisconnected(Peer peer, int peerCount) {
-
-                    }
-
-                    @Override
-                    public Message onPreMessageReceived(Peer peer, Message m) {
-                        return null;
-                    }
-
+                peerGroup.addOnTransactionBroadcastListener(new OnTransactionBroadcastListener() {
                     @Override
                     public void onTransaction(Peer peer, Transaction t) {
                         if (t.getHash().equals(transactionHash)) {
@@ -184,20 +157,14 @@ public class TransactionBroadcast {
                             invokeAndRecord(confidenceInTable.numBroadcastPeers(), mined );
                         }
                     }
-
-                    @Nullable
-                    @Override
-                    public List<Message> getData(Peer peer, GetDataMessage m) {
-                        return null;
-                    }
                 });
             }
 
-            // Satoshis code sends an inv in this case and then lets the peer request the tx data. We just
+            // Bitcoin Core sends an inv in this case and then lets the peer request the tx data. We just
             // blast out the TX here for a couple of reasons. Firstly it's simpler: in the case where we have
             // just a single connection we don't have to wait for getdata to be received and handled before
             // completing the future in the code immediately below. Secondly, it's faster. The reason the
-            // Satoshi client sends an inv is privacy - it means you can't tell if the peer originated the
+            // Bitcoin Core sends an inv is privacy - it means you can't tell if the peer originated the
             // transaction or not. However, we are not a fully validating node and this is advertised in
             // our version message, as SPV nodes cannot relay it doesn't give away any additional information
             // to skip the inv here - we wouldn't send invs anyway.
@@ -222,7 +189,7 @@ public class TransactionBroadcast {
             // So we just have to assume we're done, at that point. This happens when we're not given
             // any peer discovery source and the user just calls connectTo() once.
             if (minConnections == 1) {
-                peerGroup.removeEventListener(rejectionListener);
+                peerGroup.removeDataEventListener(rejectionListener);
                 future.set(tx);
             }
         }
@@ -258,7 +225,7 @@ public class TransactionBroadcast {
                 // We're done! It's important that the PeerGroup lock is not held (by this thread) at this
                 // point to avoid triggering inversions when the Future completes.
                 log.debug("broadcastTransaction: {} complete", tx.getHash());
-                peerGroup.removeEventListener(rejectionListener);
+                peerGroup.removeDataEventListener(rejectionListener);
                 conf.removeEventListener(this);
                 future.set(tx);  // RE-ENTRANCY POINT
             }

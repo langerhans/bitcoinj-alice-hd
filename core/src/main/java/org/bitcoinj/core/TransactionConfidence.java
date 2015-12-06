@@ -22,7 +22,6 @@ import com.google.common.util.concurrent.*;
 import org.bitcoinj.utils.*;
 
 import javax.annotation.*;
-import java.io.*;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -58,8 +57,7 @@ import static com.google.common.base.Preconditions.*;
  * method to ensure the block depth is up to date.</p>
  * To make a copy that won't be changed, use {@link org.bitcoinj.core.TransactionConfidence#duplicate()}.
  */
-public class TransactionConfidence implements Serializable {
-    private static final long serialVersionUID = 4577920141400556444L;
+public class TransactionConfidence {
 
     /**
      * The peers that have announced the transaction to us. Network nodes don't have stable identities, so we use
@@ -70,7 +68,7 @@ public class TransactionConfidence implements Serializable {
     /** The Transaction that this confidence object is associated with. */
     private final Sha256Hash hash;
     // Lazily created listeners array.
-    private transient CopyOnWriteArrayList<ListenerRegistration<Listener>> listeners;
+    private CopyOnWriteArrayList<ListenerRegistration<Listener>> listeners;
 
     // The depth of the transaction on the best chain in blocks. An unconfirmed block has depth 0.
     private int depth;
@@ -97,6 +95,15 @@ public class TransactionConfidence implements Serializable {
          * It can also mean that a coinbase transaction has been made dead from it being moved onto a side chain.
          */
         DEAD(4),
+
+        /**
+         * If IN_CONFLICT, then it means there is another transaction (or several other transactions) spending one
+         * (or several) of its inputs but nor this transaction nor the other/s transaction/s are included in the best chain.
+         * The other/s transaction/s should be IN_CONFLICT too.
+         * IN_CONFLICT can be thought as an intermediary state between a) PENDING and BUILDING or b) PENDING and DEAD.
+         * Another common name for this situation is "double spend".
+         */
+        IN_CONFLICT(5),
 
         /**
          * If a transaction hasn't been broadcast yet, or there's no record of it, its confidence is UNKNOWN.
@@ -138,15 +145,6 @@ public class TransactionConfidence implements Serializable {
         broadcastBy = new CopyOnWriteArrayList<PeerAddress>();
         listeners = new CopyOnWriteArrayList<ListenerRegistration<Listener>>();
         this.hash = hash;
-    }
-
-    /**
-     * In case the class gets created from a serialised version, we need to recreate the listeners object as it is set 
-     * as transient and only created in the constructor.
-     */
-    private void readObject(java.io.ObjectInputStream in) throws IOException, ClassNotFoundException {
-        in.defaultReadObject();
-        listeners = new CopyOnWriteArrayList<ListenerRegistration<Listener>>();
     }
 
     /**
@@ -203,7 +201,7 @@ public class TransactionConfidence implements Serializable {
      * the best chain). If you want to know when the transaction gets buried under another block, consider using
      * a future from {@link #getDepthFuture(int)}.</p>
      */
-    public void addEventListener(Listener listener, Executor executor) {
+    public void addEventListener(Executor executor, Listener listener) {
         checkNotNull(listener);
         listeners.addIfAbsent(new ListenerRegistration<Listener>(listener, executor));
         pinnedConfidenceObjects.add(this);
@@ -220,7 +218,7 @@ public class TransactionConfidence implements Serializable {
      * confidence object to determine the new depth.</p>
      */
     public void addEventListener(Listener listener) {
-        addEventListener(listener, Threading.USER_THREAD);
+        addEventListener(Threading.USER_THREAD, listener);
     }
 
     public boolean removeEventListener(Listener listener) {
@@ -271,7 +269,7 @@ public class TransactionConfidence implements Serializable {
         if (confidenceType != ConfidenceType.DEAD) {
             overridingTransaction = null;
         }
-        if (confidenceType == ConfidenceType.PENDING) {
+        if (confidenceType == ConfidenceType.PENDING || confidenceType == ConfidenceType.IN_CONFLICT) {
             depth = 0;
             appearedAtChainHeight = -1;
         }
@@ -334,6 +332,9 @@ public class TransactionConfidence implements Serializable {
             case PENDING:
                 builder.append("Pending/unconfirmed.");
                 break;
+            case IN_CONFLICT:
+                builder.append("In conflict.");
+                break;
             case BUILDING:
                 builder.append(String.format("Appeared in best chain at height %d, depth %d.",
                         getAppearedAtChainHeight(), getDepthInBlocks()));
@@ -354,8 +355,8 @@ public class TransactionConfidence implements Serializable {
 
     /**
      * <p>Depth in the chain is an approximation of how much time has elapsed since the transaction has been confirmed.
-     * On average there is supposed to be a new block every 10 minutes, but the actual rate may vary. The reference
-     * (Satoshi) implementation considers a transaction impractical to reverse after 6 blocks, but as of EOY 2011 network
+     * On average there is supposed to be a new block every 10 minutes, but the actual rate may vary. Bitcoin Core
+     * considers a transaction impractical to reverse after 6 blocks, but as of EOY 2011 network
      * security is high enough that often only one block is considered enough even for high value transactions. For low
      * value transactions like songs, or other cheap items, no blocks at all may be necessary.</p>
      *     
@@ -388,12 +389,12 @@ public class TransactionConfidence implements Serializable {
      * store this information.
      *
      * @return the transaction that double spent this one
-     * @throws IllegalStateException if confidence type is not OVERRIDDEN_BY_DOUBLE_SPEND.
+     * @throws IllegalStateException if confidence type is not DEAD.
      */
     public synchronized Transaction getOverridingTransaction() {
         if (getConfidenceType() != ConfidenceType.DEAD)
             throw new IllegalStateException("Confidence type is " + getConfidenceType() +
-                                            ", not OVERRIDDEN_BY_DOUBLE_SPEND");
+                                            ", not DEAD");
         return overridingTransaction;
     }
 
@@ -467,14 +468,14 @@ public class TransactionConfidence implements Serializable {
         if (getDepthInBlocks() >= depth) {
             result.set(this);
         }
-        addEventListener(new Listener() {
+        addEventListener(executor, new Listener() {
             @Override public void onConfidenceChanged(TransactionConfidence confidence, ChangeReason reason) {
                 if (getDepthInBlocks() >= depth) {
                     removeEventListener(this);
                     result.set(confidence);
                 }
             }
-        }, executor);
+        });
         return result;
     }
 

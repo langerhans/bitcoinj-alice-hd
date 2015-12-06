@@ -4,11 +4,14 @@
 
   <groupId>org.bitcoinj</groupId>
   <artifactId>bitcoinj-parent</artifactId>
-  <version>0.13.3-alice-0.1.5</version>
+  <version>0.14-alice-0.1.5</version>
   <packaging>pom</packaging>
 
   <modules>
     <module>core</module>
+    <module>examples</module>
+    <module>tools</module>
+    <module>wallettemplate</module>
   </modules>
 
   <parent>
@@ -79,6 +82,13 @@
           <archive>
             <addMavenDescriptor>false</addMavenDescriptor>
           </archive>
+        </configuration>
+      </plugin>
+
+      <plugin>
+        <artifactId>maven-javadoc-plugin</artifactId>
+        <configuration>
+          <notimestamp>true</notimestamp>
         </configuration>
       </plugin>
 

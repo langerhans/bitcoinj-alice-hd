@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
-package org.bitcoinj.core;
+package org.bitcoinj.core.listeners;
+
+import org.bitcoinj.core.*;
 
 import javax.annotation.*;
 import java.util.*;
@@ -24,14 +26,7 @@ import java.util.*;
  * they can pre-filter messages before they are procesesed by a {@link Peer} or {@link PeerGroup}, and they can
  * provide transactions to remote peers when they ask for them.</p>
  */
-public interface PeerEventListener {
-    /**
-     * <p>Called when peers are discovered, this happens at startup of {@link PeerGroup} or if we run out of
-     * suitable {@link Peer}s to connect to.</p>
-     *
-     * @param peerAddresses the set of discovered {@link PeerAddress}es
-     */
-    void onPeersDiscovered(Set<PeerAddress> peerAddresses);
+public interface PeerDataEventListener {
 
     // TODO: Fix the Block/FilteredBlock type hierarchy so we can avoid the stupid typeless API here.
     /**
@@ -56,26 +51,6 @@ public interface PeerEventListener {
     void onChainDownloadStarted(Peer peer, int blocksLeft);
 
     /**
-     * Called when a peer is connected. If this listener is registered to a {@link Peer} instead of a {@link PeerGroup},
-     * peerCount will always be 1.
-     *
-     * @param peer
-     * @param peerCount the total number of connected peers
-     */
-    void onPeerConnected(Peer peer, int peerCount);
-
-    /**
-     * Called when a peer is disconnected. Note that this won't be called if the listener is registered on a
-     * {@link PeerGroup} and the group is in the process of shutting down. If this listener is registered to a
-     * {@link Peer} instead of a {@link PeerGroup}, peerCount will always be 0. This handler can be called without
-     * a corresponding invocation of onPeerConnected if the initial connection is never successful.
-     *
-     * @param peer
-     * @param peerCount the total number of connected peers
-     */
-    void onPeerDisconnected(Peer peer, int peerCount);
-
-    /**
      * <p>Called when a message is received by a peer, before the message is processed. The returned message is
      * processed instead. Returning null will cause the message to be ignored by the Peer returning the same message
      * object allows you to see the messages received but not change them. The result from one event listeners
@@ -85,11 +60,6 @@ public interface PeerEventListener {
      * {@link org.bitcoinj.utils.Threading#SAME_THREAD}</p>
      */
     Message onPreMessageReceived(Peer peer, Message m);
-
-    /**
-     * Called when a new transaction is broadcast over the network.
-     */
-    void onTransaction(Peer peer, Transaction t);
 
     /**
      * <p>Called when a peer receives a getdata message, usually in response to an "inv" being broadcast. Return as many

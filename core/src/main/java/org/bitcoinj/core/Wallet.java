@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright 2013 Google Inc.
  * Copyright 2014 Andreas Schildbach
  *
@@ -19,14 +19,18 @@ package org.bitcoinj.core;
 
 import com.google.common.annotations.*;
 import com.google.common.base.*;
-import com.google.common.base.Objects;
-import com.google.common.base.Objects.*;
 import com.google.common.collect.*;
 import com.google.common.primitives.*;
 import com.google.common.util.concurrent.*;
 import com.google.protobuf.*;
 import net.jcip.annotations.*;
 import org.bitcoin.protocols.payments.Protos.*;
+import org.bitcoinj.core.listeners.NewBestBlockListener;
+import org.bitcoinj.core.listeners.ReorganizeListener;
+import org.bitcoinj.core.listeners.TransactionReceivedInBlockListener;
+import org.bitcoinj.core.listeners.WalletEventListener;
+import org.bitcoinj.core.listeners.WalletChangeEventListener;
+import org.bitcoinj.core.listeners.WalletCoinEventListener;
 import org.bitcoinj.core.TransactionConfidence.*;
 import org.bitcoinj.crypto.*;
 import org.bitcoinj.params.*;
@@ -42,8 +46,8 @@ import org.spongycastle.crypto.params.*;
 
 import javax.annotation.*;
 import java.io.*;
+import java.math.BigInteger;
 import java.util.*;
-
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 import java.util.concurrent.locks.*;
@@ -81,38 +85,37 @@ import static com.google.common.base.Preconditions.*;
  * other objects, see the <a href="https://bitcoinj.github.io/getting-started">Getting started</a> tutorial
  * on the website to learn more about how to set everything up.</p>
  *
- * <p>Wallets can be serialized using either Java serialization - this is not compatible across versions of bitcoinj,
- * or protocol buffer serialization. You need to save the wallet whenever it changes, there is an auto-save feature
- * that simplifies this for you although you're still responsible for manually triggering a save when your app is about
- * to quit because the auto-save feature waits a moment before actually committing to disk to avoid IO thrashing when
- * the wallet is changing very fast (eg due to a block chain sync). See
+ * <p>Wallets can be serialized using protocol buffers. You need to save the wallet whenever it changes, there is an
+ * auto-save feature that simplifies this for you although you're still responsible for manually triggering a save when
+ * your app is about to quit because the auto-save feature waits a moment before actually committing to disk to avoid IO
+ * thrashing when the wallet is changing very fast (eg due to a block chain sync). See
  * {@link Wallet#autosaveToFile(java.io.File, long, java.util.concurrent.TimeUnit, org.bitcoinj.wallet.WalletFiles.Listener)}
  * for more information about this.</p>
  */
-public class Wallet extends BaseTaggableObject implements Serializable, BlockChainListener, PeerFilterProvider, KeyBag, TransactionBag {
+public class Wallet extends BaseTaggableObject
+    implements NewBestBlockListener, TransactionReceivedInBlockListener, PeerFilterProvider, KeyBag, TransactionBag, ReorganizeListener {
     private static final Logger log = LoggerFactory.getLogger(Wallet.class);
-    private static final long serialVersionUID = 2L;
     private static final int MINIMUM_BLOOM_DATA_LENGTH = 8;
 
-    // Ordering: lock > keychainLock. Keychain is protected separately to allow fast querying of current receive address
+    // Ordering: lock > keyChainGroupLock. KeyChainGroup is protected separately to allow fast querying of current receive address
     // even if the wallet itself is busy e.g. saving or processing a big reorg. Useful for reducing UI latency.
     protected final ReentrantLock lock = Threading.lock("wallet");
-    protected final ReentrantLock keychainLock = Threading.lock("wallet-keychain");
+    protected final ReentrantLock keyChainGroupLock = Threading.lock("wallet-keychaingroup");
 
     // The various pools below give quick access to wallet-relevant transactions by the state they're in:
     //
     // Pending:  Transactions that didn't make it into the best chain yet. Pending transactions can be killed if a
-    //           double-spend against them appears in the best chain, in which case they move to the dead pool.
-    //           If a double-spend appears in the pending state as well, currently we just ignore the second
-    //           and wait for the miners to resolve the race.
+    //           double spend against them appears in the best chain, in which case they move to the dead pool.
+    //           If a double spend appears in the pending state as well, we update the confidence type
+    //           of all txns in conflict to IN_CONFLICT and wait for the miners to resolve the race.
     // Unspent:  Transactions that appeared in the best chain and have outputs we can spend. Note that we store the
     //           entire transaction in memory even though for spending purposes we only really need the outputs, the
     //           reason being that this simplifies handling of re-orgs. It would be worth fixing this in future.
     // Spent:    Transactions that appeared in the best chain but don't have any spendable outputs. They're stored here
     //           for history browsing/auditing reasons only and in future will probably be flushed out to some other
     //           kind of cold storage or just removed.
-    // Dead:     Transactions that we believe will never confirm get moved here, out of pending. Note that the Satoshi
-    //           client has no notion of dead-ness: the assumption is that double spends won't happen so there's no
+    // Dead:     Transactions that we believe will never confirm get moved here, out of pending. Note that Bitcoin
+    //           Core has no notion of dead-ness: the assumption is that double spends won't happen so there's no
     //           need to notify the user about them. We take a more pessimistic approach and try to track the fact that
     //           transactions have been double spent so applications can do something intelligent (cancel orders, show
     //           to the user in the UI, etc). A transaction can leave dead and move into spent/unspent if there is a
@@ -146,10 +149,10 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
 
     // The key chain group is not thread safe, and generally the whole hierarchy of objects should not be mutated
     // outside the wallet lock. So don't expose this object directly via any accessors!
-    @GuardedBy("keychainLock") protected KeyChainGroup keychain;
+    @GuardedBy("keyChainGroupLock") protected KeyChainGroup keyChainGroup;
 
     // A list of scripts watched by this wallet.
-    @GuardedBy("keychainLock") private Set<Script> watchedScripts;
+    @GuardedBy("keyChainGroupLock") private Set<Script> watchedScripts;
 
     protected final Context context;
     protected final NetworkParameters params;
@@ -158,16 +161,17 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
     private int lastBlockSeenHeight;
     private long lastBlockSeenTimeSecs;
 
-    private transient CopyOnWriteArrayList<ListenerRegistration<WalletEventListener>> eventListeners;
+    private CopyOnWriteArrayList<ListenerRegistration<WalletChangeEventListener>> changeListeners;
+    private CopyOnWriteArrayList<ListenerRegistration<WalletCoinEventListener>> coinListeners;
 
     // A listener that relays confidence changes from the transaction confidence object to the wallet event listener,
     // as a convenience to API users so they don't have to register on every transaction themselves.
-    private transient TransactionConfidence.Listener txConfidenceListener;
+    private TransactionConfidence.Listener txConfidenceListener;
 
     // If a TX hash appears in this set then notifyNewBestBlock will ignore it, as its confidence was already set up
     // in receive() via Transaction.setBlockAppearance(). As the BlockChain always calls notifyNewBestBlock even if
     // it sent transactions to the wallet, without this we'd double count.
-    private transient HashSet<Sha256Hash> ignoreNextNewBlock;
+    private HashSet<Sha256Hash> ignoreNextNewBlock;
     // Whether or not to ignore nLockTime > 0 transactions that are received to the mempool.
     private boolean acceptRiskyTransactions;
 
@@ -184,7 +188,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
     // that was created after it. Useful when you believe some keys have been compromised.
     private volatile long vKeyRotationTimestamp;
 
-    protected transient CoinSelector coinSelector = new DefaultCoinSelector();
+    protected CoinSelector coinSelector = new DefaultCoinSelector();
 
     // The wallet version. This is an int that can be used to track breaking changes in the wallet format.
     // You can also use it to detect wallets that come from the future (ie they contain features you
@@ -283,21 +287,22 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
     public Wallet(Context context, KeyChainGroup keyChainGroup) {
         this.context = context;
         this.params = context.getParams();
-        this.keychain = checkNotNull(keyChainGroup);
-        if (params == UnitTestParams.get())
-            this.keychain.setLookaheadSize(5);  // Cut down excess computation for unit tests.
-        // If this keychain was created fresh just now (new wallet), make HD so a backup can be made immediately
+        this.keyChainGroup = checkNotNull(keyChainGroup);
+        if (params.getId().equals(NetworkParameters.ID_UNITTESTNET))
+            this.keyChainGroup.setLookaheadSize(5);  // Cut down excess computation for unit tests.
+        // If this keyChainGroup was created fresh just now (new wallet), make HD so a backup can be made immediately
         // without having to call current/freshReceiveKey. If there are already keys in the chain of any kind then
         // we're probably being deserialized so leave things alone: the API user can upgrade later.
-        if (this.keychain.numKeys() == 0)
-            this.keychain.createAndActivateNewHDChain();
+        if (this.keyChainGroup.numKeys() == 0)
+            this.keyChainGroup.createAndActivateNewHDChain();
         watchedScripts = Sets.newHashSet();
         unspent = new HashMap<Sha256Hash, Transaction>();
         spent = new HashMap<Sha256Hash, Transaction>();
         pending = new HashMap<Sha256Hash, Transaction>();
         dead = new HashMap<Sha256Hash, Transaction>();
         transactions = new HashMap<Sha256Hash, Transaction>();
-        eventListeners = new CopyOnWriteArrayList<ListenerRegistration<WalletEventListener>>();
+        changeListeners = new CopyOnWriteArrayList<ListenerRegistration<WalletChangeEventListener>>();
+        coinListeners = new CopyOnWriteArrayList<ListenerRegistration<WalletCoinEventListener>>();
         extensions = new HashMap<String, WalletExtension>();
         // Use a linked hash map to ensure ordering of event listeners is correct.
         confidenceChanged = new LinkedHashMap<Transaction, TransactionConfidence.Listener.ChangeReason>();
@@ -340,8 +345,8 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
     /**
      * Gets the active keychain via {@link KeyChainGroup#getActiveKeyChain()}
      */
-    public DeterministicKeyChain getActiveKeychain() {
-        return keychain.getActiveKeyChain();
+    public DeterministicKeyChain getActiveKeyChain() {
+        return keyChainGroup.getActiveKeyChain();
     }
 
     /**
@@ -383,12 +388,12 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      * a different key (for each purpose independently).
      */
     public DeterministicKey currentKey(KeyChain.KeyPurpose purpose) {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
             maybeUpgradeToHD();
-            return keychain.currentKey(purpose);
+            return keyChainGroup.currentKey(purpose);
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
@@ -404,12 +409,12 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      * Returns address for a {@link #currentKey(org.bitcoinj.wallet.KeyChain.KeyPurpose)}
      */
     public Address currentAddress(KeyChain.KeyPurpose purpose) {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
             maybeUpgradeToHD();
-            return keychain.currentAddress(purpose);
+            return keyChainGroup.currentAddress(purpose);
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
@@ -443,12 +448,12 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      */
     public List<DeterministicKey> freshKeys(KeyChain.KeyPurpose purpose, int numberOfKeys) {
         List<DeterministicKey> keys;
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
             maybeUpgradeToHD();
-            keys = keychain.freshKeys(purpose, numberOfKeys);
+            keys = keyChainGroup.freshKeys(purpose, numberOfKeys);
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
         // Do we really need an immediate hard save? Arguably all this is doing is saving the 'current' key
         // and that's not quite so important, so we could coalesce for more performance.
@@ -469,11 +474,11 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      */
     public Address freshAddress(KeyChain.KeyPurpose purpose) {
         Address key;
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
-            key = keychain.freshAddress(purpose);
+            key = keyChainGroup.freshAddress(purpose);
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
         saveNow();
         return key;
@@ -492,11 +497,11 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      * {@link #currentReceiveKey()} or {@link #currentReceiveAddress()}.
      */
     public List<ECKey> getIssuedReceiveKeys() {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
-            return keychain.getActiveKeyChain().getIssuedReceiveKeys();
+            return keyChainGroup.getActiveKeyChain().getIssuedReceiveKeys();
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
@@ -520,11 +525,11 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      * you automatically the first time a new key is requested (this happens when spending due to the change address).
      */
     public void upgradeToDeterministic(@Nullable KeyParameter aesKey) throws DeterministicUpgradeRequiresPassword {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
-            keychain.upgradeToDeterministic(vKeyRotationTimestamp, aesKey);
+            keyChainGroup.upgradeToDeterministic(vKeyRotationTimestamp, aesKey);
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
@@ -534,11 +539,11 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      * that would require a new address or key.
      */
     public boolean isDeterministicUpgradeRequired() {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
-            return keychain.isDeterministicUpgradeRequired();
+            return keyChainGroup.isDeterministicUpgradeRequired();
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
@@ -546,10 +551,10 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
         maybeUpgradeToHD(null);
     }
 
-    @GuardedBy("keychainLock")
+    @GuardedBy("keyChainGroupLock")
     private void maybeUpgradeToHD(@Nullable KeyParameter aesKey) throws DeterministicUpgradeRequiresPassword {
-        checkState(keychainLock.isHeldByCurrentThread());
-        if (keychain.isDeterministicUpgradeRequired()) {
+        checkState(keyChainGroupLock.isHeldByCurrentThread());
+        if (keyChainGroup.isDeterministicUpgradeRequired()) {
             log.info("Upgrade to HD wallets is required, attempting to do so.");
             try {
                 upgradeToDeterministic(aesKey);
@@ -565,11 +570,11 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      * Returns a snapshot of the watched scripts. This view is not live.
      */
     public List<Script> getWatchedScripts() {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
             return new ArrayList<Script>(watchedScripts);
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
@@ -579,23 +584,23 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      * @return Whether the key was removed or not.
      */
     public boolean removeKey(ECKey key) {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
-            return keychain.removeImportedKey(key);
+            return keyChainGroup.removeImportedKey(key);
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
     /**
-     * Returns the number of keys in the key chain, including lookahead keys.
+     * Returns the number of keys in the key chain group, including lookahead keys.
      */
-    public int getKeychainSize() {
-        keychainLock.lock();
+    public int getKeyChainGroupSize() {
+        keyChainGroupLock.lock();
         try {
-            return keychain.numKeys();
+            return keyChainGroup.numKeys();
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
@@ -603,17 +608,23 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      * Returns a list of the non-deterministic keys that have been imported into the wallet, or the empty list if none.
      */
     public List<ECKey> getImportedKeys() {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
-            return keychain.getImportedKeys();
+            return keyChainGroup.getImportedKeys();
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
     /** Returns the address used for change outputs. Note: this will probably go away in future. */
-    public Address getChangeAddress() {
+    public Address currentChangeAddress() {
         return currentAddress(KeyChain.KeyPurpose.CHANGE);
+    }
+    /**
+     * @deprecated use {@link #currentChangeAddress()} instead.
+     */
+    public Address getChangeAddress() {
+        return currentChangeAddress();
     }
 
     /**
@@ -654,11 +665,11 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
         // API usage check.
         checkNoDeterministicKeys(keys);
         int result;
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
-            result = keychain.importKeys(keys);
+            result = keyChainGroup.importKeys(keys);
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
         saveNow();
         return result;
@@ -673,23 +684,23 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
 
     /** Takes a list of keys and a password, then encrypts and imports them in one step using the current keycrypter. */
     public int importKeysAndEncrypt(final List<ECKey> keys, CharSequence password) {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
             checkNotNull(getKeyCrypter(), "Wallet is not encrypted");
             return importKeysAndEncrypt(keys, getKeyCrypter().deriveKey(password));
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
     /** Takes a list of keys and an AES key, then encrypts and imports them in one step using the current keycrypter. */
     public int importKeysAndEncrypt(final List<ECKey> keys, KeyParameter aesKey) {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
             checkNoDeterministicKeys(keys);
-            return keychain.importKeysAndEncrypt(keys, aesKey);
+            return keyChainGroup.importKeysAndEncrypt(keys, aesKey);
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
@@ -705,53 +716,53 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      * </p>
      */
     public void addAndActivateHDChain(DeterministicKeyChain chain) {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
-            keychain.addAndActivateHDChain(chain);
+            keyChainGroup.addAndActivateHDChain(chain);
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
     /** See {@link org.bitcoinj.wallet.DeterministicKeyChain#setLookaheadSize(int)} for more info on this. */
-    public void setKeychainLookaheadSize(int lookaheadSize) {
-        keychainLock.lock();
+    public void setKeyChainGroupLookaheadSize(int lookaheadSize) {
+        keyChainGroupLock.lock();
         try {
-            keychain.setLookaheadSize(lookaheadSize);
+            keyChainGroup.setLookaheadSize(lookaheadSize);
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
     /** See {@link org.bitcoinj.wallet.DeterministicKeyChain#setLookaheadSize(int)} for more info on this. */
-    public int getKeychainLookaheadSize() {
-        keychainLock.lock();
+    public int getKeyChainGroupLookaheadSize() {
+        keyChainGroupLock.lock();
         try {
-            return keychain.getLookaheadSize();
+            return keyChainGroup.getLookaheadSize();
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
     /** See {@link org.bitcoinj.wallet.DeterministicKeyChain#setLookaheadThreshold(int)} for more info on this. */
-    public void setKeychainLookaheadThreshold(int num) {
-        keychainLock.lock();
+    public void setKeyChainGroupLookaheadThreshold(int num) {
+        keyChainGroupLock.lock();
         try {
             maybeUpgradeToHD();
-            keychain.setLookaheadThreshold(num);
+            keyChainGroup.setLookaheadThreshold(num);
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
     /** See {@link org.bitcoinj.wallet.DeterministicKeyChain#setLookaheadThreshold(int)} for more info on this. */
-    public int getKeychainLookaheadThreshold() {
-        keychainLock.lock();
+    public int getKeyChainGroupLookaheadThreshold() {
+        keyChainGroupLock.lock();
         try {
             maybeUpgradeToHD();
-            return keychain.getLookaheadThreshold();
+            return keyChainGroup.getLookaheadThreshold();
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
@@ -762,12 +773,12 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      * zero key in the recommended BIP32 hierarchy.
      */
     public DeterministicKey getWatchingKey() {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
             maybeUpgradeToHD();
-            return keychain.getActiveKeyChain().getWatchingKey();
+            return keyChainGroup.getActiveKeyChain().getWatchingKey();
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
@@ -779,12 +790,12 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      *             if there are no keys, or if there is a mix between watching and non-watching keys.
      */
     public boolean isWatching() {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
             maybeUpgradeToHD();
-            return keychain.isWatching();
+            return keyChainGroup.isWatching();
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
@@ -843,7 +854,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      */
     public int addWatchedScripts(final List<Script> scripts) {
         int added = 0;
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
             for (final Script script : scripts) {
                 // Script.equals/hashCode() only takes into account the program bytes, so this step lets the user replace
@@ -856,7 +867,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
                 added++;
             }
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
         if (added > 0) {
             queueOnScriptsChanged(scripts, true);
@@ -917,7 +928,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      * Returns all addresses watched by this wallet.
      */
     public List<Address> getWatchedAddresses() {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
             List<Address> addresses = new LinkedList<Address>();
             for (Script script : watchedScripts)
@@ -925,7 +936,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
                     addresses.add(script.getToAddress(params));
             return addresses;
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
@@ -938,21 +949,21 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
     @Override
     @Nullable
     public ECKey findKeyFromPubHash(byte[] pubkeyHash) {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
-            return keychain.findKeyFromPubHash(pubkeyHash);
+            return keyChainGroup.findKeyFromPubHash(pubkeyHash);
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
     /** Returns true if the given key is in the wallet, false otherwise. Currently an O(N) operation. */
     public boolean hasKey(ECKey key) {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
-            return keychain.hasKey(key);
+            return keyChainGroup.hasKey(key);
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
@@ -965,11 +976,11 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
     /** {@inheritDoc} */
     @Override
     public boolean isWatchedScript(Script script) {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
             return watchedScripts.contains(script);
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
@@ -980,11 +991,11 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
     @Override
     @Nullable
     public ECKey findKeyFromPubKey(byte[] pubkey) {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
-            return keychain.findKeyFromPubKey(pubkey);
+            return keyChainGroup.findKeyFromPubKey(pubkey);
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
@@ -995,17 +1006,17 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
     }
 
     /**
-     * Locates a redeem data (redeem script and keys) from the keychain given the hash of the script.
+     * Locates a redeem data (redeem script and keys) from the keyChainGroup given the hash of the script.
      * Returns RedeemData object or null if no such data was found.
      */
     @Nullable
     @Override
     public RedeemData findRedeemDataFromScriptHash(byte[] payToScriptHash) {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
-            return keychain.findRedeemDataFromScriptHash(payToScriptHash);
+            return keyChainGroup.findRedeemDataFromScriptHash(payToScriptHash);
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
@@ -1020,20 +1031,20 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      * See {@link org.bitcoinj.wallet.DeterministicKeyChain#markKeyAsUsed(DeterministicKey)} for more info on this.
      */
     private void markKeysAsUsed(Transaction tx) {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
             for (TransactionOutput o : tx.getOutputs()) {
                 try {
                     Script script = o.getScriptPubKey();
                     if (script.isSentToRawPubKey()) {
                         byte[] pubkey = script.getPubKey();
-                        keychain.markPubKeyAsUsed(pubkey);
+                        keyChainGroup.markPubKeyAsUsed(pubkey);
                     } else if (script.isSentToAddress()) {
                         byte[] pubkeyHash = script.getPubKeyHash();
-                        keychain.markPubKeyHashAsUsed(pubkeyHash);
-                    } else if (script.isPayToScriptHash() && keychain.isMarried()) {
+                        keyChainGroup.markPubKeyHashAsUsed(pubkeyHash);
+                    } else if (script.isPayToScriptHash()) {
                         Address a = Address.fromP2SHScript(tx.getParams(), script);
-                        keychain.markP2SHAddressAsUsed(a);
+                        keyChainGroup.markP2SHAddressAsUsed(a);
                     }
                 } catch (ScriptException e) {
                     // Just means we didn't understand the output of this transaction: ignore it.
@@ -1041,7 +1052,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
                 }
             }
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
@@ -1050,14 +1061,14 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      * @throws org.bitcoinj.core.ECKey.MissingPrivateKeyException if the seed is unavailable (watching wallet)
      */
     public DeterministicSeed getKeyChainSeed() {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
-            DeterministicSeed seed = keychain.getActiveKeyChain().getSeed();
+            DeterministicSeed seed = keyChainGroup.getActiveKeyChain().getSeed();
             if (seed == null)
                 throw new ECKey.MissingPrivateKeyException();
             return seed;
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
@@ -1066,12 +1077,12 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      * use currentReceiveKey/freshReceiveKey instead.
      */
     public DeterministicKey getKeyByPath(List<ChildNumber> path) {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
             maybeUpgradeToHD();
-            return keychain.getActiveKeyChain().getKeyByPath(path, false);
+            return keyChainGroup.getActiveKeyChain().getKeyByPath(path, false);
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
@@ -1081,12 +1092,12 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      * parameters to derive a key from the given password.
      */
     public void encrypt(CharSequence password) {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
             final KeyCrypterScrypt scrypt = new KeyCrypterScrypt();
-            keychain.encrypt(scrypt, scrypt.deriveKey(password));
+            keyChainGroup.encrypt(scrypt, scrypt.deriveKey(password));
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
         saveNow();
     }
@@ -1100,11 +1111,11 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      * @throws KeyCrypterException Thrown if the wallet encryption fails. If so, the wallet state is unchanged.
      */
     public void encrypt(KeyCrypter keyCrypter, KeyParameter aesKey) {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
-            keychain.encrypt(keyCrypter, aesKey);
+            keyChainGroup.encrypt(keyCrypter, aesKey);
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
         saveNow();
     }
@@ -1114,13 +1125,13 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      * @throws KeyCrypterException Thrown if the wallet decryption fails. If so, the wallet state is unchanged.
      */
     public void decrypt(CharSequence password) {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
-            final KeyCrypter crypter = keychain.getKeyCrypter();
+            final KeyCrypter crypter = keyChainGroup.getKeyCrypter();
             checkState(crypter != null, "Not encrypted");
-            keychain.decrypt(crypter.deriveKey(password));
+            keyChainGroup.decrypt(crypter.deriveKey(password));
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
         saveNow();
     }
@@ -1132,11 +1143,11 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      * @throws KeyCrypterException Thrown if the wallet decryption fails. If so, the wallet state is unchanged.
      */
     public void decrypt(KeyParameter aesKey) {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
-            keychain.decrypt(aesKey);
+            keyChainGroup.decrypt(aesKey);
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
         saveNow();
     }
@@ -1149,11 +1160,11 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      *  @throws IllegalStateException if the wallet is not encrypted.
      */
     public boolean checkPassword(CharSequence password) {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
-            return keychain.checkPassword(password);
+            return keyChainGroup.checkPassword(password);
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
@@ -1163,11 +1174,11 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      *  @return boolean true if AES key supplied can decrypt the first encrypted private key in the wallet, false otherwise.
      */
     public boolean checkAESKey(KeyParameter aesKey) {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
-            return keychain.checkAESKey(aesKey);
+            return keyChainGroup.checkAESKey(aesKey);
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
@@ -1177,11 +1188,11 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      */
     @Nullable
     public KeyCrypter getKeyCrypter() {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
-            return keychain.getKeyCrypter();
+            return keyChainGroup.getKeyCrypter();
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
@@ -1191,15 +1202,15 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      * (This is a convenience method - the encryption type is actually stored in the keyCrypter).
      */
     public EncryptionType getEncryptionType() {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
-            KeyCrypter crypter = keychain.getKeyCrypter();
+            KeyCrypter crypter = keyChainGroup.getKeyCrypter();
             if (crypter != null)
                 return crypter.getUnderstoodEncryptionType();
             else
                 return EncryptionType.UNENCRYPTED;
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
@@ -1210,23 +1221,23 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
 
     /** Changes wallet encryption password, this is atomic operation. */
     public void changeEncryptionPassword(CharSequence currentPassword, CharSequence newPassword){
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
             decrypt(currentPassword);
             encrypt(newPassword);
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
     /** Changes wallet AES encryption key, this is atomic operation. */
     public void changeEncryptionKey(KeyCrypter keyCrypter, KeyParameter currentAesKey, KeyParameter newAesKey){
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
             decrypt(currentAesKey);
             encrypt(keyCrypter, newAesKey);
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
@@ -1238,12 +1249,12 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
 
     // TODO: Make this package private once the classes finish moving around.
     /** Internal use only. */
-    public List<Protos.Key> serializeKeychainToProtobuf() {
-        keychainLock.lock();
+    public List<Protos.Key> serializeKeyChainGroupToProtobuf() {
+        keyChainGroupLock.lock();
         try {
-            return keychain.serializeToProtobuf();
+            return keyChainGroup.serializeToProtobuf();
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
@@ -1536,11 +1547,6 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
         return wallet;
     }
 
-    private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {
-        in.defaultReadObject();
-        createTransientState();
-    }
-
     //endregion
 
     /******************************************************************************************************************/
@@ -1705,6 +1711,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
             // We only care about transactions that:
             //   - Send us coins
             //   - Spend our coins
+            //   - Double spend a tx in our wallet
             if (!isTransactionRelevant(tx)) {
                 log.debug("Received tx that isn't relevant to this wallet, discarding.");
                 return false;
@@ -1723,47 +1730,69 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      * <p>Note that if the tx has inputs containing one of our keys, but the connected transaction is not in the wallet,
      * it will not be considered relevant.</p>
      */
-    @Override
     public boolean isTransactionRelevant(Transaction tx) throws ScriptException {
         lock.lock();
         try {
             return tx.getValueSentFromMe(this).signum() > 0 ||
                    tx.getValueSentToMe(this).signum() > 0 ||
-                   checkForDoubleSpendAgainstPending(tx, false);
+                   !findDoubleSpendsAgainst(tx, transactions).isEmpty();
         } finally {
             lock.unlock();
         }
     }
 
     /**
-     * Checks if "tx" is spending any inputs of pending transactions. Not a general check, but it can work even if
+     * Finds transactions in the specified candidates that double spend "tx". Not a general check, but it can work even if
      * the double spent inputs are not ours.
+     * @return The set of transactions that double spend "tx".
      */
-    private boolean checkForDoubleSpendAgainstPending(Transaction tx, boolean takeAction) {
+    private Set<Transaction> findDoubleSpendsAgainst(Transaction tx, Map<Sha256Hash, Transaction> candidates) {
         checkState(lock.isHeldByCurrentThread());
+        if (tx.isCoinBase()) return Sets.newHashSet();
         // Compile a set of outpoints that are spent by tx.
         HashSet<TransactionOutPoint> outpoints = new HashSet<TransactionOutPoint>();
         for (TransactionInput input : tx.getInputs()) {
             outpoints.add(input.getOutpoint());
         }
         // Now for each pending transaction, see if it shares any outpoints with this tx.
-        LinkedList<Transaction> doubleSpentTxns = Lists.newLinkedList();
-        for (Transaction p : pending.values()) {
+        Set<Transaction> doubleSpendTxns = Sets.newHashSet();
+        for (Transaction p : candidates.values()) {
             for (TransactionInput input : p.getInputs()) {
                 // This relies on the fact that TransactionOutPoint equality is defined at the protocol not object
                 // level - outpoints from two different inputs that point to the same output compare the same.
                 TransactionOutPoint outpoint = input.getOutpoint();
                 if (outpoints.contains(outpoint)) {
-                    // It does, it's a double spend against the pending pool, which makes it relevant.
-                    if (!doubleSpentTxns.isEmpty() && doubleSpentTxns.getLast() == p) continue;
-                    doubleSpentTxns.add(p);
+                    // It does, it's a double spend against the candidates, which makes it relevant.
+                    doubleSpendTxns.add(p);
                 }
             }
         }
-        if (takeAction && !doubleSpentTxns.isEmpty()) {
-            killTx(tx, doubleSpentTxns);
+        return doubleSpendTxns;
+    }
+
+    /**
+     * Adds to txSet all the txns in txPool spending outputs of txns in txSet,
+     * and all txns spending the outputs of those txns, recursively.
+     */
+    void addTransactionsDependingOn(Set<Transaction> txSet, Set<Transaction> txPool) {
+        Map<Sha256Hash, Transaction> txQueue = new LinkedHashMap<Sha256Hash, Transaction>();
+        for (Transaction tx : txSet) {
+            txQueue.put(tx.getHash(), tx);
         }
-        return !doubleSpentTxns.isEmpty();
+        while(!txQueue.isEmpty()) {
+            Transaction tx = txQueue.remove(txQueue.keySet().iterator().next());
+            for (Transaction anotherTx : txPool) {
+                if (anotherTx.equals(tx)) continue;
+                for (TransactionInput input : anotherTx.getInputs()) {
+                    if (input.getOutpoint().getHash().equals(tx.getHash())) {
+                        if (txQueue.get(anotherTx.getHash()) == null) {
+                            txQueue.put(anotherTx.getHash(), anotherTx);
+                            txSet.add(anotherTx);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -1790,16 +1819,22 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
                                  int relativityOffset) throws VerificationException {
         lock.lock();
         try {
+            if (!isTransactionRelevant(tx))
+                return;
             receive(tx, block, blockType, relativityOffset);
         } finally {
             lock.unlock();
         }
     }
 
+    // Whether to do a saveNow or saveLater when we are notified of the next best block.
+    private boolean hardSaveOnNextBlock = false;
+
     private void receive(Transaction tx, StoredBlock block, BlockChain.NewBlockType blockType,
                          int relativityOffset) throws VerificationException {
         // Runs in a peer thread.
         checkState(lock.isHeldByCurrentThread());
+
         Coin prevBalance = getBalance();
         Sha256Hash txHash = tx.getHash();
         boolean bestChain = blockType == BlockChain.NewBlockType.BEST_CHAIN;
@@ -1832,6 +1867,9 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
             log.info("  <-pending");
 
         if (bestChain) {
+            boolean wasDead = dead.remove(txHash) != null;
+            if (wasDead)
+                log.info("  <-dead");
             if (wasPending) {
                 // Was pending and is now confirmed. Disconnect the outputs in case we spent any already: they will be
                 // re-connected by processTxFromBestChain below.
@@ -1843,7 +1881,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
                     }
                 }
             }
-            processTxFromBestChain(tx, wasPending);
+            processTxFromBestChain(tx, wasPending || wasDead);
         } else {
             checkState(sideChain);
             // Transactions that appear in a side chain will have that appearance recorded below - we assume that
@@ -1857,7 +1895,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
                 // Ignore the case where a tx appears on a side chain at the same time as the best chain (this is
                 // quite normal and expected).
                 Sha256Hash hash = tx.getHash();
-                if (!unspent.containsKey(hash) && !spent.containsKey(hash)) {
+                if (!unspent.containsKey(hash) && !spent.containsKey(hash) && !dead.containsKey(hash)) {
                     // Otherwise put it (possibly back) into pending.
                     // Committing it updates the spent flags and inserts into the pool as well.
                     commitTx(tx);
@@ -1874,6 +1912,22 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
                 // this method has been called by BlockChain for all relevant transactions. Otherwise we'd double
                 // count.
                 ignoreNextNewBlock.add(txHash);
+
+                // When a tx is received from the best chain, if other txns that spend this tx are IN_CONFLICT,
+                // change its confidence to PENDING (Unless they are also spending other txns IN_CONFLICT).
+                // Consider dependency chains.
+                Set<Transaction> currentTxDependencies = Sets.newHashSet(tx);
+                addTransactionsDependingOn(currentTxDependencies, getTransactions(true));
+                currentTxDependencies.remove(tx);
+                List<Transaction> currentTxDependenciesSorted = sortTxnsByDependency(currentTxDependencies);
+                for (Transaction txDependency : currentTxDependenciesSorted) {
+                    if (txDependency.getConfidence().getConfidenceType().equals(ConfidenceType.IN_CONFLICT)) {
+                        if (isNotSpendingTxnsInConfidenceType(txDependency, ConfidenceType.IN_CONFLICT)) {
+                            txDependency.getConfidence().setConfidenceType(ConfidenceType.PENDING);
+                            confidenceChanged.put(txDependency, TransactionConfidence.Listener.ChangeReason.TYPE);
+                        }
+                    }
+                }
             }
         }
 
@@ -1912,8 +1966,55 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
 
         informConfidenceListenersIfNotReorganizing();
         checkState(isConsistent());
-        // ALICE - saveLater rather than saveNow so as to improve replay / sync
         saveLater();
+        hardSaveOnNextBlock = true;
+    }
+
+    /** Finds if tx is NOT spending other txns which are in the specified confidence type */
+    private boolean isNotSpendingTxnsInConfidenceType(Transaction tx, ConfidenceType confidenceType) {
+        for (TransactionInput txInput : tx.getInputs()) {
+            Transaction connectedTx = this.getTransaction(txInput.getOutpoint().getHash());
+            if (connectedTx != null && connectedTx.getConfidence().getConfidenceType().equals(confidenceType)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Creates and returns a new List with the same txns as inputSet
+     * but txns are sorted by depencency (a topological sort).
+     * If tx B spends tx A, then tx A should be before tx B on the returned List.
+     * Several invocations to this method with the same inputSet could result in lists with txns in different order,
+     * as there is no guarantee on the order of the returned txns besides what was already stated.
+     */
+    List<Transaction> sortTxnsByDependency(Set<Transaction> inputSet) {
+        ArrayList<Transaction> result = new ArrayList<Transaction>(inputSet);
+        for (int i = 0; i < result.size()-1; i++) {
+            boolean txAtISpendsOtherTxInTheList;
+            do {
+                txAtISpendsOtherTxInTheList = false;
+                for (int j = i+1; j < result.size(); j++) {
+                    if (spends(result.get(i), result.get(j))) {
+                        Transaction transactionAtI = result.remove(i);
+                        result.add(j, transactionAtI);
+                        txAtISpendsOtherTxInTheList = true;
+                        break;
+                    }
+                }
+            } while (txAtISpendsOtherTxInTheList);
+        }
+        return result;
+    }
+
+    /** Finds whether txA spends txB */
+    boolean spends(Transaction txA, Transaction txB) {
+        for (TransactionInput txInput : txA.getInputs()) {
+            if (txInput.getOutpoint().getHash().equals(txB.getHash())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void informConfidenceListenersIfNotReorganizing() {
@@ -1975,8 +2076,14 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
 
             informConfidenceListenersIfNotReorganizing();
             maybeQueueOnWalletChanged();
-            // Coalesce writes to avoid throttling on disk access when catching up with the chain.
-            saveLater();
+
+            if (hardSaveOnNextBlock) {
+                saveNow();
+                hardSaveOnNextBlock = false;
+            } else {
+                // Coalesce writes to avoid throttling on disk access when catching up with the chain.
+                saveLater();
+            }
         } finally {
             lock.unlock();
         }
@@ -2033,7 +2140,12 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
             addWalletTransaction(Pool.SPENT, tx);
         }
 
-        checkForDoubleSpendAgainstPending(tx, true);
+        // Kill txns in conflict with this tx
+        Set<Transaction> doubleSpendTxns = findDoubleSpendsAgainst(tx, pending);
+        if (!doubleSpendTxns.isEmpty()) {
+            // no need to addTransactionsDependingOn(doubleSpendTxns) because killTxns() already kills dependencies;
+            killTxns(doubleSpendTxns, tx);
+        }
     }
 
     /**
@@ -2079,7 +2191,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
                     // Can be:
                     // (1) We already marked this output as spent when we saw the pending transaction (most likely).
                     //     Now it's being confirmed of course, we cannot mark it as spent again.
-                    // (2) A double spend from chain: this will be handled later by checkForDoubleSpendAgainstPending.
+                    // (2) A double spend from chain: this will be handled later by findDoubleSpendsAgainst()/killTxns().
                     //
                     // In any case, nothing to do here.
                 } else {
@@ -2138,8 +2250,8 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
     }
 
     // Updates the wallet when a double spend occurs. overridingTx can be null for the case of coinbases
-    private void killTx(@Nullable Transaction overridingTx, List<Transaction> killedTx) {
-        LinkedList<Transaction> work = new LinkedList<Transaction>(killedTx);
+    private void killTxns(Set<Transaction> txnsToKill, @Nullable Transaction overridingTx) {
+        LinkedList<Transaction> work = new LinkedList<Transaction>(txnsToKill);
         while (!work.isEmpty()) {
             final Transaction tx = work.poll();
             log.warn("TX {} killed{}", tx.getHashAsString(),
@@ -2153,7 +2265,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
             for (TransactionInput deadInput : tx.getInputs()) {
                 Transaction connected = deadInput.getOutpoint().fromTx;
                 if (connected == null) continue;
-                if (connected.getConfidence().getConfidenceType() != ConfidenceType.DEAD) {
+                if (connected.getConfidence().getConfidenceType() != ConfidenceType.DEAD && deadInput.getConnectedOutput().getSpentBy() != null && deadInput.getConnectedOutput().getSpentBy().equals(deadInput)) {
                     checkState(myUnspents.add(deadInput.getConnectedOutput()));
                     log.info("Added to UNSPENTS: {} in {}", deadInput.getConnectedOutput(), deadInput.getConnectedOutput().getParentTransaction().getHash());
                 }
@@ -2241,12 +2353,42 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
             // move any transactions that are now fully spent to the spent map so we can skip them when creating future
             // spends.
             updateForSpends(tx, false);
-            // Add to the pending pool. It'll be moved out once we receive this transaction on the best chain.
-            // This also registers txConfidenceListener so wallet listeners get informed.
-            log.info("->pending: {}", tx.getHashAsString());
-            tx.getConfidence().setConfidenceType(ConfidenceType.PENDING);
-            confidenceChanged.put(tx, TransactionConfidence.Listener.ChangeReason.TYPE);
-            addWalletTransaction(Pool.PENDING, tx);
+
+            Set<Transaction> doubleSpendPendingTxns = findDoubleSpendsAgainst(tx, pending);
+            Set<Transaction> doubleSpendUnspentTxns = findDoubleSpendsAgainst(tx, unspent);
+            Set<Transaction> doubleSpendSpentTxns = findDoubleSpendsAgainst(tx, spent);
+
+            if (!doubleSpendUnspentTxns.isEmpty() ||
+                !doubleSpendSpentTxns.isEmpty() ||
+                !isNotSpendingTxnsInConfidenceType(tx, ConfidenceType.DEAD)) {
+                // tx is a double spend against a tx already in the best chain or spends outputs of a DEAD tx.
+                // Add tx to the dead pool and schedule confidence listener notifications.
+                log.info("->dead: {}", tx.getHashAsString());
+                tx.getConfidence().setConfidenceType(ConfidenceType.DEAD);
+                confidenceChanged.put(tx, TransactionConfidence.Listener.ChangeReason.TYPE);
+                addWalletTransaction(Pool.DEAD, tx);
+            } else if (!doubleSpendPendingTxns.isEmpty() ||
+                !isNotSpendingTxnsInConfidenceType(tx, ConfidenceType.IN_CONFLICT)) {
+                // tx is a double spend against a pending tx or spends outputs of a tx already IN_CONFLICT.
+                // Add tx to the pending pool. Update the confidence type of tx, the txns in conflict with tx and all
+                // their dependencies to IN_CONFLICT and schedule confidence listener notifications.
+                log.info("->pending (IN_CONFLICT): {}", tx.getHashAsString());
+                addWalletTransaction(Pool.PENDING, tx);
+                doubleSpendPendingTxns.add(tx);
+                addTransactionsDependingOn(doubleSpendPendingTxns, getTransactions(true));
+                for (Transaction doubleSpendTx : doubleSpendPendingTxns) {
+                    doubleSpendTx.getConfidence().setConfidenceType(ConfidenceType.IN_CONFLICT);
+                    confidenceChanged.put(doubleSpendTx, TransactionConfidence.Listener.ChangeReason.TYPE);
+                }
+            } else {
+                // No conflict detected.
+                // Add to the pending pool and schedule confidence listener notifications.
+                log.info("->pending: {}", tx.getHashAsString());
+                tx.getConfidence().setConfidenceType(ConfidenceType.PENDING);
+                confidenceChanged.put(tx, TransactionConfidence.Listener.ChangeReason.TYPE);
+                addWalletTransaction(Pool.PENDING, tx);
+            }
+
             // Mark any keys used in the outputs as "used", this allows wallet UI's to auto-advance the current key
             // they are showing to the user in qr codes etc.
             markKeysAsUsed(tx);
@@ -2302,17 +2444,50 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      * like receiving money. Runs the listener methods in the user thread.
      */
     public void addEventListener(WalletEventListener listener) {
-        addEventListener(listener, Threading.USER_THREAD);
+        addChangeEventListener(Threading.USER_THREAD, listener);
+        addCoinEventListener(Threading.USER_THREAD, listener);
+    }
+
+    /**
+     * Adds an event listener object. Methods on this object are called when something interesting happens,
+     * like receiving money. Runs the listener methods in the user thread.
+     */
+    public void addChangeEventListener(WalletChangeEventListener listener) {
+        addChangeEventListener(Threading.USER_THREAD, listener);
+    }
+
+    /**
+     * Adds an event listener object. Methods on this object are called when something interesting happens,
+     * like receiving money. Runs the listener methods in the user thread.
+     */
+    public void addCoinEventListener(WalletCoinEventListener listener) {
+        addCoinEventListener(Threading.USER_THREAD, listener);
     }
 
     /**
      * Adds an event listener object. Methods on this object are called when something interesting happens,
      * like receiving money. The listener is executed by the given executor.
      */
-    public void addEventListener(WalletEventListener listener, Executor executor) {
+    public void addChangeEventListener(Executor executor, WalletChangeEventListener listener) {
         // This is thread safe, so we don't need to take the lock.
-        eventListeners.add(new ListenerRegistration<WalletEventListener>(listener, executor));
-        keychain.addEventListener(listener, executor);
+        changeListeners.add(new ListenerRegistration<WalletChangeEventListener>(listener, executor));
+        keyChainGroup.addEventListener(listener, executor);
+    }
+
+    /**
+     * Adds an event listener object. Methods on this object are called when something interesting happens,
+     * like receiving money. The listener is executed by the given executor.
+     */
+    public void addCoinEventListener(Executor executor, WalletCoinEventListener listener) {
+        // This is thread safe, so we don't need to take the lock.
+        coinListeners.add(new ListenerRegistration<WalletCoinEventListener>(listener, executor));
+    }
+
+    /** Use the more specific listener methods instead */
+    @Deprecated
+    public void addEventListener(WalletEventListener listener, Executor executor) {
+        addCoinEventListener(executor, listener);
+        addChangeEventListener(executor, listener);
     }
 
     /**
@@ -2320,13 +2495,30 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      * was never added.
      */
     public boolean removeEventListener(WalletEventListener listener) {
-        keychain.removeEventListener(listener);
-        return ListenerRegistration.removeFromList(listener, eventListeners);
+        return removeChangeEventListener(listener) ||
+            removeCoinEventListener(listener);
+    }
+
+    /**
+     * Removes the given event listener object. Returns true if the listener was removed, false if that listener
+     * was never added.
+     */
+    public boolean removeChangeEventListener(WalletChangeEventListener listener) {
+        keyChainGroup.removeEventListener(listener);
+        return ListenerRegistration.removeFromList(listener, changeListeners);
+    }
+
+    /**
+     * Removes the given event listener object. Returns true if the listener was removed, false if that listener
+     * was never added.
+     */
+    public boolean removeCoinEventListener(WalletCoinEventListener listener) {
+        return ListenerRegistration.removeFromList(listener, coinListeners);
     }
 
     private void queueOnTransactionConfidenceChanged(final Transaction tx) {
         checkState(lock.isHeldByCurrentThread());
-        for (final ListenerRegistration<WalletEventListener> registration : eventListeners) {
+        for (final ListenerRegistration<WalletChangeEventListener> registration : changeListeners) {
             if (registration.executor == Threading.SAME_THREAD) {
                 registration.listener.onTransactionConfidenceChanged(this, tx);
             } else {
@@ -2346,7 +2538,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
         checkState(lock.isHeldByCurrentThread());
         checkState(onWalletChangedSuppressions >= 0);
         if (onWalletChangedSuppressions > 0) return;
-        for (final ListenerRegistration<WalletEventListener> registration : eventListeners) {
+        for (final ListenerRegistration<WalletChangeEventListener> registration : changeListeners) {
             registration.executor.execute(new Runnable() {
                 @Override
                 public void run() {
@@ -2358,7 +2550,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
 
     protected void queueOnCoinsReceived(final Transaction tx, final Coin balance, final Coin newBalance) {
         checkState(lock.isHeldByCurrentThread());
-        for (final ListenerRegistration<WalletEventListener> registration : eventListeners) {
+        for (final ListenerRegistration<WalletCoinEventListener> registration : coinListeners) {
             registration.executor.execute(new Runnable() {
                 @Override
                 public void run() {
@@ -2370,7 +2562,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
 
     protected void queueOnCoinsSent(final Transaction tx, final Coin prevBalance, final Coin newBalance) {
         checkState(lock.isHeldByCurrentThread());
-        for (final ListenerRegistration<WalletEventListener> registration : eventListeners) {
+        for (final ListenerRegistration<WalletCoinEventListener> registration : coinListeners) {
             registration.executor.execute(new Runnable() {
                 @Override
                 public void run() {
@@ -2383,7 +2575,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
     protected void queueOnReorganize() {
         checkState(lock.isHeldByCurrentThread());
         checkState(insideReorg);
-        for (final ListenerRegistration<WalletEventListener> registration : eventListeners) {
+        for (final ListenerRegistration<WalletChangeEventListener> registration : changeListeners) {
             registration.executor.execute(new Runnable() {
                 @Override
                 public void run() {
@@ -2394,7 +2586,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
     }
 
     protected void queueOnScriptsChanged(final List<Script> scripts, final boolean isAddingScripts) {
-        for (final ListenerRegistration<WalletEventListener> registration : eventListeners) {
+        for (final ListenerRegistration<WalletChangeEventListener> registration : changeListeners) {
             registration.executor.execute(new Runnable() {
                 @Override
                 public void run() {
@@ -2446,10 +2638,10 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
         }
     }
 
-    private static void addWalletTransactionsToSet(Set<WalletTransaction> txs,
+    private static void addWalletTransactionsToSet(Set<WalletTransaction> txns,
                                                    Pool poolType, Collection<Transaction> pool) {
         for (Transaction tx : pool) {
-            txs.add(new WalletTransaction(poolType, tx));
+            txns.add(new WalletTransaction(poolType, tx));
         }
     }
 
@@ -2511,7 +2703,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
         }
         // This is safe even if the listener has been added before, as TransactionConfidence ignores duplicate
         // registration requests. That makes the code in the wallet simpler.
-        tx.getConfidence().addEventListener(txConfidenceListener, Threading.SAME_THREAD);
+        tx.getConfidence().addEventListener(Threading.SAME_THREAD, txConfidenceListener);
     }
 
     /**
@@ -2643,7 +2835,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      */
     public List<TransactionOutput> getWatchedOutputs(boolean excludeImmatureCoinbases) {
         lock.lock();
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
             LinkedList<TransactionOutput> candidates = Lists.newLinkedList();
             for (Transaction tx : Iterables.concat(unspent.values(), pending.values())) {
@@ -2661,7 +2853,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
             }
             return candidates;
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
             lock.unlock();
         }
     }
@@ -2752,7 +2944,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
     }
 
     /** Returns a copy of the internal unspent outputs list */
-    List<TransactionOutput> getUnspents() {
+    public List<TransactionOutput> getUnspents() {
         lock.lock();
         try {
             return new ArrayList<TransactionOutput>(myUnspents);
@@ -2778,7 +2970,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
     public String toString(boolean includePrivateKeys, boolean includeTransactions, boolean includeExtensions,
                            @Nullable AbstractBlockChain chain) {
         lock.lock();
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
             StringBuilder builder = new StringBuilder();
             Coin estimatedBalance = getBalance(BalanceType.ESTIMATED);
@@ -2793,7 +2985,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
             final String lastBlockSeenTimeStr = lastBlockSeenTime == null ? "time unknown" : lastBlockSeenTime.toString();
             builder.append(String.format("Last seen best block: %d (%s): %s%n",
                     getLastBlockSeenHeight(), lastBlockSeenTimeStr, getLastBlockSeenHash()));
-            final KeyCrypter crypter = keychain.getKeyCrypter();
+            final KeyCrypter crypter = keyChainGroup.getKeyCrypter();
             if (crypter != null)
                 builder.append(String.format("Encryption: %s%n", crypter));
             if (isWatching())
@@ -2804,7 +2996,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
             final long keyRotationTime = vKeyRotationTimestamp * 1000;
             if (keyRotationTime > 0)
                 builder.append(String.format("Key rotation time: %s\n", Utils.dateTimeFormat(keyRotationTime)));
-            builder.append(keychain.toString(includePrivateKeys));
+            builder.append(keyChainGroup.toString(includePrivateKeys));
 
             if (!watchedScripts.isEmpty()) {
                 builder.append("\nWatched scripts:\n");
@@ -2840,7 +3032,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
             }
             return builder.toString();
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
             lock.unlock();
         }
     }
@@ -2899,31 +3091,19 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      */
     @Override
     public long getEarliestKeyCreationTime() {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
-            long earliestTime = keychain.getEarliestKeyCreationTime();
+            long earliestTime = keyChainGroup.getEarliestKeyCreationTime();
             for (Script script : watchedScripts)
                 earliestTime = Math.min(script.getCreationTimeSeconds(), earliestTime);
             if (earliestTime == Long.MAX_VALUE)
                 return Utils.currentTimeSeconds();
             return earliestTime;
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
-  /**
-   * Set the key creation time
-   * @param keyCreationTimeSeconds the key creation time in seconds
-   */
-  public void setEarliestKeyCreationTime(long keyCreationTimeSeconds) {
-          keychainLock.lock();
-          try {
-              keychain.setEarliestKeyCreationTime(keyCreationTimeSeconds);
-          } finally {
-              keychainLock.unlock();
-          }
-      }
     /** Returns the hash of the last seen best-chain block, or null if the wallet is too old to store this data. */
     @Nullable
     public Sha256Hash getLastBlockSeenHash() {
@@ -3187,23 +3367,14 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
     @SuppressWarnings("FieldAccessNotGuarded")
     private void checkBalanceFuturesLocked(@Nullable Coin avail) {
         checkState(lock.isHeldByCurrentThread());
-        Coin estimated = null;
         final ListIterator<BalanceFutureRequest> it = balanceFutureRequests.listIterator();
         while (it.hasNext()) {
             final BalanceFutureRequest req = it.next();
-            Coin val = null;
-            if (req.type == BalanceType.AVAILABLE) {
-                if (avail == null) avail = getBalance(BalanceType.AVAILABLE);
-                if (avail.compareTo(req.value) < 0) continue;
-                val = avail;
-            } else if (req.type == BalanceType.ESTIMATED) {
-                if (estimated == null) estimated = getBalance(BalanceType.ESTIMATED);
-                if (estimated.compareTo(req.value) < 0) continue;
-                val = estimated;
-            }
+            Coin val = getBalance(req.type);   // This could be slow for lots of futures.
+            if (val.compareTo(req.value) < 0) continue;
             // Found one that's finished.
             it.remove();
-            final Coin v = checkNotNull(val);
+            final Coin v = val;
             // Don't run any user-provided future listeners with our lock held.
             Threading.USER_THREAD.execute(new Runnable() {
                 @Override public void run() {
@@ -3211,6 +3382,82 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
                 }
             });
         }
+    }
+
+    /**
+     * Returns the amount of bitcoin ever received via output. <b>This is not the balance!</b> If an output spends from a
+     * transaction whose inputs are also to our wallet, the input amounts are deducted from the outputs contribution, with a minimum of zero
+     * contribution. The idea behind this is we avoid double counting money sent to us.
+     * @return the total amount of satoshis received, regardless of whether it was spent or not.
+     */
+    public Coin getTotalReceived() {
+        Coin total = Coin.ZERO;
+
+        // Include outputs to us if they were not just change outputs, ie the inputs to us summed to less
+        // than the outputs to us.
+        for (Transaction tx: transactions.values()) {
+            Coin txTotal = Coin.ZERO;
+            for (TransactionOutput output : tx.getOutputs()) {
+                if (output.isMine(this)) {
+                    txTotal = txTotal.add(output.getValue());
+                }
+            }
+            for (TransactionInput in : tx.getInputs()) {
+                TransactionOutput prevOut = in.getConnectedOutput();
+                if (prevOut != null && prevOut.isMine(this)) {
+                    txTotal = txTotal.subtract(prevOut.getValue());
+                }
+            }
+            if (txTotal.isPositive()) {
+                total = total.add(txTotal);
+            }
+        }
+        return total;
+    }
+
+    /**
+     * Returns the amount of bitcoin ever sent via output. If an output is sent to our own wallet, because of change or
+     * rotating keys or whatever, we do not count it. If the wallet was
+     * involved in a shared transaction, i.e. there is some input to the transaction that we don't have the key for, then
+     * we multiply the sum of the output values by the proportion of satoshi coming in to our inputs. Essentially we treat
+     * inputs as pooling into the transaction, becoming fungible and being equally distributed to all outputs.
+     * @return the total amount of satoshis sent by us
+     */
+    public Coin getTotalSent() {
+        Coin total = Coin.ZERO;
+
+        for (Transaction tx: transactions.values()) {
+            // Count spent outputs to only if they were not to us. This means we don't count change outputs.
+            Coin txOutputTotal = Coin.ZERO;
+            for (TransactionOutput out : tx.getOutputs()) {
+                if (out.isMine(this) == false) {
+                    txOutputTotal = txOutputTotal.add(out.getValue());
+                }
+            }
+
+            // Count the input values to us
+            Coin txOwnedInputsTotal = Coin.ZERO;
+            for (TransactionInput in : tx.getInputs()) {
+                TransactionOutput prevOut = in.getConnectedOutput();
+                if (prevOut != null && prevOut.isMine(this)) {
+                    txOwnedInputsTotal = txOwnedInputsTotal.add(prevOut.getValue());
+                }
+            }
+
+            // If there is an input that isn't from us, i.e. this is a shared transaction
+            Coin txInputsTotal = tx.getInputSum();
+            if (txOwnedInputsTotal != txInputsTotal) {
+
+                // multiply our output total by the appropriate proportion to account for the inputs that we don't own
+                BigInteger txOutputTotalNum = new BigInteger(txOutputTotal.toString());
+                txOutputTotalNum = txOutputTotalNum.multiply(new BigInteger(txOwnedInputsTotal.toString()));
+                txOutputTotalNum = txOutputTotalNum.divide(new BigInteger(txInputsTotal.toString()));
+                txOutputTotal = Coin.valueOf(txOutputTotalNum.longValue());
+            }
+            total = total.add(txOutputTotal);
+
+        }
+        return total;
     }
 
     //endregion
@@ -3292,7 +3539,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
          * attacks expensive.</p>
          *
          * <p>This is a constant fee (in satoshis) which will be added to the transaction. It is recommended that it be
-         * at least {@link Transaction#REFERENCE_DEFAULT_MIN_TX_FEE} if it is set, as default reference clients will
+         * at least {@link Transaction#REFERENCE_DEFAULT_MIN_TX_FEE} if it is set, as default Bitcoin Core will
          * otherwise simply treat the transaction as if there were no fee at all.</p>
          *
          * <p>You might also consider adding a {@link SendRequest#feePerKb} to set the fee per kb of transaction size
@@ -3309,8 +3556,8 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
          *
          * <p>This is a dynamic fee (in satoshis) which will be added to the transaction for each kilobyte in size
          * including the first. This is useful as as miners usually sort pending transactions by their fee per unit size
-         * when choosing which transactions to add to a block. Note that, to keep this equivalent to the reference
-         * client definition, a kilobyte is defined as 1000 bytes, not 1024.</p>
+         * when choosing which transactions to add to a block. Note that, to keep this equivalent to Bitcoin Core
+         * definition, a kilobyte is defined as 1000 bytes, not 1024.</p>
          *
          * <p>You might also consider using a {@link SendRequest#fee} to set the fee added for the first kb of size.</p>
          */
@@ -3323,7 +3570,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
         public static Coin DEFAULT_FEE_PER_KB = Transaction.REFERENCE_DEFAULT_MIN_TX_FEE;
 
         /**
-         * <p>Requires that there be enough fee for a default reference client to at least relay the transaction.
+         * <p>Requires that there be enough fee for a default Bitcoin Core to at least relay the transaction.
          * (ie ensure the transaction will not be outright rejected by the network). Defaults to true, you should
          * only set this to false if you know what you're doing.</p>
          *
@@ -3439,7 +3686,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
         @Override
         public String toString() {
             // print only the user-settable fields
-            ToStringHelper helper = Objects.toStringHelper(this).omitNullValues();
+            MoreObjects.ToStringHelper helper = MoreObjects.toStringHelper(this).omitNullValues();
             helper.add("emptyWallet", emptyWallet);
             helper.add("changeAddress", changeAddress);
             helper.add("fee", fee);
@@ -3455,7 +3702,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
 
     /**
      * <p>Statelessly creates a transaction that sends the given value to address. The change is sent to
-     * {@link Wallet#getChangeAddress()}, so you must have added at least one key.</p>
+     * {@link Wallet#currentChangeAddress()}, so you must have added at least one key.</p>
      *
      * <p>If you just want to send money quickly, you probably want
      * {@link Wallet#sendCoins(TransactionBroadcaster, Address, Coin)} instead. That will create the sending
@@ -3486,7 +3733,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      */
     public Transaction createSend(Address address, Coin value) throws InsufficientMoneyException {
         SendRequest req = SendRequest.to(address, value);
-        if (params == UnitTestParams.get())
+        if (params.getId().equals(NetworkParameters.ID_UNITTESTNET))
             req.shuffleOutputs = false;
         completeTx(req);
         return req.tx;
@@ -3518,7 +3765,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
 
     /**
      * <p>Sends coins to the given address, via the given {@link PeerGroup}. Change is returned to
-     * {@link Wallet#getChangeAddress()}. Note that a fee may be automatically added if one may be required for the
+     * {@link Wallet#currentChangeAddress()}. Note that a fee may be automatically added if one may be required for the
      * transaction to be confirmed.</p>
      *
      * <p>The returned object provides both the transaction, and a future that can be used to learn when the broadcast
@@ -3606,7 +3853,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
     }
 
     /**
-     * Sends coins to the given address, via the given {@link Peer}. Change is returned to {@link Wallet#getChangeAddress()}.
+     * Sends coins to the given address, via the given {@link Peer}. Change is returned to {@link Wallet#currentChangeAddress()}.
      * If an exception is thrown by {@link Peer#sendMessage(Message)} the transaction is still committed, so the
      * pending transaction must be broadcast <b>by you</b> at some other time. Note that a fee may be automatically added
      * if one may be required for the transaction to be confirmed.
@@ -3967,7 +4214,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
         UTXOProvider utxoProvider = checkNotNull(vUTXOProvider, "No UTXO provider has been set");
         List<UTXO> candidates = new ArrayList<UTXO>();
         List<ECKey> keys = getImportedKeys();
-        keys.addAll(getActiveKeychain().getLeafKeys());
+        keys.addAll(getActiveKeyChain().getLeafKeys());
         List<Address> addresses = new ArrayList<Address>();
         for (ECKey key : keys) {
             Address address = new Address(params, key.getPubKeyHash());
@@ -4111,6 +4358,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
         }
 
         @Override public int compareTo(TxOffsetPair o) {
+            // note that in this implementation compareTo() is not consistent with equals()
             return Ints.compare(offset, o.offset);
         }
     }
@@ -4188,10 +4436,10 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
                         //
                         // This could be recursive, although of course because we don't have the full transaction
                         // graph we can never reliably kill all transactions we might have that were rooted in
-                        // this coinbase tx. Some can just go pending forever, like the Satoshi client. However we
+                        // this coinbase tx. Some can just go pending forever, like the Bitcoin Core. However we
                         // can do our best.
                         log.warn("Coinbase killed by re-org: {}", tx.getHashAsString());
-                        killTx(null, ImmutableList.of(tx));
+                        killTxns(ImmutableSet.of(tx), null);
                     } else {
                         for (TransactionOutput output : tx.getOutputs()) {
                             TransactionInput input = output.getSpentBy();
@@ -4216,6 +4464,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
                 // there's another re-org.
                 if (tx.isCoinBase()) continue;
                 log.info("  ->pending {}", tx.getHash());
+
                 tx.getConfidence().setConfidenceType(ConfidenceType.PENDING);  // Wipe height/depth/work data.
                 confidenceChanged.put(tx, TransactionConfidence.Listener.ChangeReason.TYPE);
                 addWalletTransaction(Pool.PENDING, tx);
@@ -4299,7 +4548,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
         if (bloomFilterGuard.incrementAndGet() > 1)
             return;
         lock.lock();
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         //noinspection FieldAccessNotGuarded
         calcBloomOutPointsLocked();
     }
@@ -4324,12 +4573,12 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
         }
     }
 
-    @Override @GuardedBy("keychainLock")
+    @Override @GuardedBy("keyChainGroupLock")
     public void endBloomFilterCalculation() {
         if (bloomFilterGuard.decrementAndGet() > 0)
             return;
         bloomOutPoints.clear();
-        keychainLock.unlock();
+        keyChainGroupLock.unlock();
         lock.unlock();
     }
 
@@ -4342,7 +4591,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
         beginBloomFilterCalculation();
         try {
             int size = bloomOutPoints.size();
-            size += keychain.getBloomFilterElementCount();
+            size += keyChainGroup.getBloomFilterElementCount();
             // Some scripts may have more than one bloom element.  That should normally be okay, because under-counting
             // just increases false-positive rate.
             size += watchedScripts.size();
@@ -4361,11 +4610,11 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
     public boolean isRequiringUpdateAllBloomFilter() {
         // This is typically called by the PeerGroup, in which case it will have already explicitly taken the lock
         // before calling, but because this is public API we must still lock again regardless.
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
             return !watchedScripts.isEmpty();
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
@@ -4393,11 +4642,11 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      * <p>See the docs for {@link BloomFilter(int, double)} for a brief explanation of anonymity when using bloom
      * filters.</p>
      */
-    @Override @GuardedBy("keychainLock")
+    @Override @GuardedBy("keyChainGroupLock")
     public BloomFilter getBloomFilter(int size, double falsePositiveRate, long nTweak) {
         beginBloomFilterCalculation();
         try {
-            BloomFilter filter = keychain.getBloomFilter(size, falsePositiveRate, nTweak);
+            BloomFilter filter = keyChainGroup.getBloomFilter(size, falsePositiveRate, nTweak);
             for (Script script : watchedScripts) {
                 for (ScriptChunk chunk : script.getChunks()) {
                     // Only add long (at least 64 bit) data to the bloom filter.
@@ -4429,20 +4678,20 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      * sequence within it to reliably find relevant transactions.
      */
     public boolean checkForFilterExhaustion(FilteredBlock block) {
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
-            int epoch = keychain.getCombinedKeyLookaheadEpochs();
+            int epoch = keyChainGroup.getCombinedKeyLookaheadEpochs();
             for (Transaction tx : block.getAssociatedTransactions().values()) {
                 markKeysAsUsed(tx);
             }
-            int newEpoch = keychain.getCombinedKeyLookaheadEpochs();
+            int newEpoch = keyChainGroup.getCombinedKeyLookaheadEpochs();
             checkState(newEpoch >= epoch);
             // If the key lookahead epoch has advanced, there was a call to addKeys and the PeerGroup already has a
             // pending request to recalculate the filter queued up on another thread. The calling Peer should abandon
             // block at this point and await a new filter before restarting the download.
             return newEpoch > epoch;
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
         }
     }
 
@@ -4521,7 +4770,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      */
     public void deserializeExtension(WalletExtension extension, byte[] data) throws Exception {
         lock.lock();
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
             // This method exists partly to establish a lock ordering of wallet > extension.
             extension.deserializeWalletExtension(this, data);
@@ -4531,7 +4780,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
             extensions.remove(extension.getWalletExtensionID());
             Throwables.propagate(throwable);
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
             lock.unlock();
         }
     }
@@ -4631,10 +4880,10 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
             if (change.signum() > 0) {
                 // The value of the inputs is greater than what we want to send. Just like in real life then,
                 // we need to take back some coins ... this is called "change". Add another output that sends the change
-                // back to us. The address comes either from the request or getChangeAddress() as a default.
+                // back to us. The address comes either from the request or currentChangeAddress() as a default.
                 Address changeAddress = req.changeAddress;
                 if (changeAddress == null)
-                    changeAddress = getChangeAddress();
+                    changeAddress = currentChangeAddress();
                 changeOutput = new TransactionOutput(params, req.tx, change, changeAddress);
                 // If the change output would result in this transaction being rejected as dust, just drop the change and make it a fee
                 if (req.ensureMinRequiredFee && Transaction.MIN_NONDUST_OUTPUT.compareTo(change) >= 0) {
@@ -4852,7 +5101,8 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
      * <p>The given time cannot be in the future.</p>
      */
     public void setKeyRotationTime(long unixTimeSeconds) {
-        checkArgument(unixTimeSeconds <= Utils.currentTimeSeconds());
+        checkArgument(unixTimeSeconds <= Utils.currentTimeSeconds(), "Given time (%s) cannot be in the future.",
+                Utils.dateTimeFormat(unixTimeSeconds * 1000));
         vKeyRotationTimestamp = unixTimeSeconds;
         saveNow();
     }
@@ -4886,13 +5136,13 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
     public ListenableFuture<List<Transaction>> doMaintenance(@Nullable KeyParameter aesKey, boolean signAndSend) throws DeterministicUpgradeRequiresPassword {
         List<Transaction> txns;
         lock.lock();
-        keychainLock.lock();
+        keyChainGroupLock.lock();
         try {
             txns = maybeRotateKeys(aesKey, signAndSend);
             if (!signAndSend)
                 return Futures.immediateFuture(txns);
         } finally {
-            keychainLock.unlock();
+            keyChainGroupLock.unlock();
             lock.unlock();
         }
         checkState(!lock.isHeldByCurrentThread());
@@ -4921,10 +5171,10 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
     }
 
     // Checks to see if any coins are controlled by rotating keys and if so, spends them.
-    @GuardedBy("keychainLock")
+    @GuardedBy("keyChainGroupLock")
     private List<Transaction> maybeRotateKeys(@Nullable KeyParameter aesKey, boolean sign) throws DeterministicUpgradeRequiresPassword {
         checkState(lock.isHeldByCurrentThread());
-        checkState(keychainLock.isHeldByCurrentThread());
+        checkState(keyChainGroupLock.isHeldByCurrentThread());
         List<Transaction> results = Lists.newLinkedList();
         // TODO: Handle chain replays here.
         final long keyRotationTimestamp = vKeyRotationTimestamp;
@@ -4932,7 +5182,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
 
         // We might have to create a new HD hierarchy if the previous ones are now rotating.
         boolean allChainsRotating = true;
-        for (DeterministicKeyChain chain : keychain.getDeterministicKeyChains()) {
+        for (DeterministicKeyChain chain : keyChainGroup.getDeterministicKeyChains()) {
             if (chain.getEarliestKeyCreationTime() >= keyRotationTimestamp) {
                 allChainsRotating = false;
                 break;
@@ -4940,17 +5190,17 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
         }
         if (allChainsRotating) {
             try {
-                if (keychain.getImportedKeys().isEmpty()) {
+                if (keyChainGroup.getImportedKeys().isEmpty()) {
                     log.info("All HD chains are currently rotating and we have no random keys, creating fresh HD chain ...");
-                    keychain.createAndActivateNewHDChain();
+                    keyChainGroup.createAndActivateNewHDChain();
                 } else {
                     log.info("All HD chains are currently rotating, attempting to create a new one from the next oldest non-rotating key material ...");
-                    keychain.upgradeToDeterministic(keyRotationTimestamp, aesKey);
+                    keyChainGroup.upgradeToDeterministic(keyRotationTimestamp, aesKey);
                     log.info(" ... upgraded to HD again, based on next best oldest key.");
                 }
             } catch (AllRandomKeysRotating rotating) {
                 log.info(" ... no non-rotating random keys available, generating entirely new HD tree: backup required after this.");
-                keychain.createAndActivateNewHDChain();
+                keyChainGroup.createAndActivateNewHDChain();
             }
             saveNow();
         }

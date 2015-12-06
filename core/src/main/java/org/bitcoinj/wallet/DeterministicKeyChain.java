@@ -1,5 +1,6 @@
 /**
  * Copyright 2014 The bitcoinj developers.
+ * Copyright 2015 Andreas Schildbach
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,6 +27,7 @@ import org.bitcoinj.script.Script;
 import org.bitcoinj.store.UnreadableWalletException;
 import org.bitcoinj.utils.Threading;
 
+import com.google.common.base.Stopwatch;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterators;
 import com.google.common.collect.PeekingIterator;
@@ -72,7 +74,7 @@ import static com.google.common.collect.Lists.newLinkedList;
  * {@link org.bitcoinj.crypto.DeterministicKey} by adding support for serialization to and from protobufs,
  * and encryption of parts of the key tree. Internally it arranges itself as per the BIP 32 spec, with the seed being
  * used to derive a master key, which is then used to derive an account key, the account key is used to derive two
- * child keys called the <i>internal</i> and <i>external</i> keys (for change and handing out addresses respectively)
+ * child keys called the <i>internal</i> and <i>external</i> parent keys (for change and handing out addresses respectively)
  * and finally the actual leaf keys that users use hanging off the end. The leaf keys are special in that they don't
  * internally store the private part at all, instead choosing to rederive the private key from the parent when
  * needed for signing. This simplifies the design for encrypted key chains.</p>
@@ -139,7 +141,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
     }
 
     // The parent keys for external keys (handed out to other people) and internal keys (used for change addresses).
-    private DeterministicKey externalKey, internalKey;
+    private DeterministicKey externalParentKey, internalParentKey;
     // How many keys on each path have actually been used. This may be fewer than the number that have been deserialized
     // or held in memory, because of the lookahead zone.
     private int issuedExternalKeys, issuedInternalKeys;
@@ -551,15 +553,15 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         externalPathAbsolute.addAll(parent.getPath());
         externalPathAbsolute.addAll(relativeExternalPath);
         System.out.println("DeterministicKeyChain - externalPathAbsolute: " + externalPathAbsolute);
-        externalKey = encryptNonLeaf(aesKey, chain, parent, ImmutableList.copyOf(externalPathAbsolute));
-        log.debug("externalKey:" + externalKey);
+        externalParentKey = encryptNonLeaf(aesKey, chain, account, HDUtils.concat(getAccountPath(), EXTERNAL_SUBPATH));
+        log.debug("externalParentKey:" + externalParentKey);
 
         List<ChildNumber> internalPathAbsolute = Lists.newArrayList();
         internalPathAbsolute.addAll(parent.getPath());
         internalPathAbsolute.addAll(relativeInternalPath);
         System.out.println("DeterministicKeyChain - " + internalPathAbsolute);
-        internalKey = encryptNonLeaf(aesKey, chain, parent,  ImmutableList.copyOf(internalPathAbsolute));
-        log.debug("internalKey:" + internalKey);
+        internalParentKey = encryptNonLeaf(aesKey, chain, account, HDUtils.concat(getAccountPath(), INTERNAL_SUBPATH));
+        log.debug("internalParentKey:" + internalParentKey);
 
         // Now copy the (pubkey only) leaf keys across to avoid rederiving them. The private key bytes are missing
         // anyway so there's nothing to encrypt.
@@ -618,18 +620,18 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
 
         if (isTrezorPath(rootNodeList)) {
           // Ensure that parents of the external and internal key nodes are present in the hierarchy
-          externalKey = hierarchy.deriveChild(rootNodeList, false, true, ChildNumber.ZERO);
-          internalKey = hierarchy.deriveChild(rootNodeList, false, true, ChildNumber.ONE);
+          externalParentKey = hierarchy.deriveChild(rootNodeList, false, true, ChildNumber.ZERO);
+          internalParentKey = hierarchy.deriveChild(rootNodeList, false, true, ChildNumber.ONE);
         } else {
-          externalKey = hierarchy.deriveChild(rootNodeList, false, false, ChildNumber.ZERO);
-          internalKey = hierarchy.deriveChild(rootNodeList, false, false, ChildNumber.ONE);
+            externalParentKey = hierarchy.deriveChild(rootNodeList, false, false, ChildNumber.ZERO);
+            internalParentKey = hierarchy.deriveChild(rootNodeList, false, false, ChildNumber.ONE);
         }
 
-        log.debug("Adding externalKey: {}", externalKey);
-        log.debug("Adding internalKey: {}", internalKey);
+        log.debug("Adding externalParentKey: {}", externalParentKey);
+        log.debug("Adding internalParentKey: {}", internalParentKey);
 
-        addToBasicChain(externalKey);
-        addToBasicChain(internalKey);
+        addToBasicChain(externalParentKey);
+        addToBasicChain(internalParentKey);
     }
 
     /** Returns a freshly derived key that has not been returned by this method before. */
@@ -655,13 +657,13 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                 case REFUND:
                     issuedExternalKeys += numberOfKeys;
                     index = issuedExternalKeys;
-                    parentKey = externalKey;
+                    parentKey = externalParentKey;
                     break;
                 case AUTHENTICATION:
                 case CHANGE:
                     issuedInternalKeys += numberOfKeys;
                     index = issuedInternalKeys;
-                    parentKey = internalKey;
+                    parentKey = internalParentKey;
                     break;
                 default:
                     throw new UnsupportedOperationException();
@@ -717,12 +719,12 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
     public DeterministicKey markKeyAsUsed(DeterministicKey k) {
         int numChildren = k.getChildNumber().i() + 1;
 
-        if (k.getParent() == internalKey) {
+        if (k.getParent() == internalParentKey) {
             if (issuedInternalKeys < numChildren) {
                 issuedInternalKeys = numChildren;
                 maybeLookAhead();
             }
-        } else if (k.getParent() == externalKey) {
+        } else if (k.getParent() == externalParentKey) {
             if (issuedExternalKeys < numChildren) {
                 issuedExternalKeys = numChildren;
                 maybeLookAhead();
@@ -941,11 +943,11 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
               log.debug("Serialising a deterministic key with path {}", key.getPath());
               detKey.addPath(num.i());
             }
-            if (key.equals(externalKey)) {
+            if (key.equals(externalParentKey)) {
                 detKey.setIssuedSubkeys(issuedExternalKeys);
                 detKey.setLookaheadSize(lookaheadSize);
                 detKey.setSigsRequiredToSpend(getSigsRequiredToSpend());
-            } else if (key.equals(internalKey)) {
+            } else if (key.equals(internalParentKey)) {
                 detKey.setIssuedSubkeys(issuedInternalKeys);
                 detKey.setLookaheadSize(lookaheadSize);
                 detKey.setSigsRequiredToSpend(getSigsRequiredToSpend());
@@ -1165,12 +1167,12 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                         //   m/44h/0h/0h/1
 
                         if (detkey.getChildNumber().num() == 0) {
-                            chain.externalKey = detkey;
+                            chain.externalParentKey = detkey;
                             chain.issuedExternalKeys = key.getDeterministicKey().getIssuedSubkeys();
                             lookaheadSize = Math.max(lookaheadSize, key.getDeterministicKey().getLookaheadSize());
                             sigsRequiredToSpend = key.getDeterministicKey().getSigsRequiredToSpend();
                         } else if (detkey.getChildNumber().num() == 1) {
-                            chain.internalKey = detkey;
+                            chain.internalParentKey = detkey;
                             chain.issuedInternalKeys = key.getDeterministicKey().getIssuedSubkeys();
                         }
                   }
@@ -1250,12 +1252,12 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
           chain = new DeterministicKeyChain(decSeed, ImmutableList.copyOf(trezorRootNodePath));
 
           // Add in the intermediate m/44/0h/0h/0 and m/44/oh/0h/1 nodes
-          DeterministicKey internalKeyDecrypted = internalKey.decrypt(getKeyCrypter(), aesKey);
+          DeterministicKey internalKeyDecrypted = internalParentKey.decrypt(getKeyCrypter(), aesKey);
           chain.hierarchy.putKey(internalKeyDecrypted);
           chain.basicKeyChain.importKey(internalKeyDecrypted);
           System.out.println("DeterministicKeyChain - added internalKeyDecrypted: " + internalKeyDecrypted);
 
-          DeterministicKey externalKeyDecrypted = externalKey.decrypt(getKeyCrypter(), aesKey);
+          DeterministicKey externalKeyDecrypted = externalParentKey.decrypt(getKeyCrypter(), aesKey);
           chain.hierarchy.putKey(externalKeyDecrypted);
           chain.basicKeyChain.importKey(externalKeyDecrypted);
           System.out.println("DeterministicKeyChain - added externalKeyDecrypted: " + externalKeyDecrypted);
@@ -1430,8 +1432,8 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
     public void maybeLookAhead() {
         lock.lock();
         try {
-            List<DeterministicKey> keys = maybeLookAhead(externalKey, issuedExternalKeys);
-            keys.addAll(maybeLookAhead(internalKey, issuedInternalKeys));
+            List<DeterministicKey> keys = maybeLookAhead(externalParentKey, issuedExternalKeys);
+            keys.addAll(maybeLookAhead(internalParentKey, issuedInternalKeys));
             if (keys.isEmpty())
                 return;
             keyLookaheadEpoch++;
@@ -1467,7 +1469,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                 needed, parent.getPathAsString(), issued, lookaheadSize, lookaheadThreshold, numChildren);
 
         List<DeterministicKey> result  = new ArrayList<DeterministicKey>(needed);
-        long now = System.currentTimeMillis();
+        final Stopwatch watch = Stopwatch.createStarted();
         int nextChild = numChildren;
         for (int i = 0; i < needed; i++) {
             DeterministicKey key = HDKeyDerivation.deriveThisOrNextChildKey(parent, nextChild);
@@ -1476,7 +1478,8 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
             result.add(key);
             nextChild = key.getChildNumber().num() + 1;
         }
-        log.info("Took {} msec", System.currentTimeMillis() - now);
+        watch.stop();
+        log.info("Took {}", watch);
         return result;
     }
 
@@ -1525,15 +1528,15 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
     /* package */ List<ECKey> getKeys(boolean includeLookahead) {
         List<ECKey> keys = basicKeyChain.getKeys();
         if (!includeLookahead) {
-            int treeSize = internalKey.getPath().size();
+            int treeSize = internalParentKey.getPath().size();
             List<ECKey> issuedKeys = new LinkedList<ECKey>();
             for (ECKey key : keys) {
                 DeterministicKey detkey = (DeterministicKey) key;
                 DeterministicKey parent = detkey.getParent();
                 if (parent == null) continue;
                 if (detkey.getPath().size() <= treeSize) continue;
-                if (parent.equals(internalKey) && detkey.getChildNumber().i() >= issuedInternalKeys) continue;
-                if (parent.equals(externalKey) && detkey.getChildNumber().i() >= issuedExternalKeys) continue;
+                if (parent.equals(internalParentKey) && detkey.getChildNumber().i() >= issuedInternalKeys) continue;
+                if (parent.equals(externalParentKey) && detkey.getChildNumber().i() >= issuedExternalKeys) continue;
                 issuedKeys.add(detkey);
             }
             return issuedKeys;
@@ -1548,7 +1551,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         final List<ECKey> keys = new ArrayList<ECKey>(getKeys(false));
         for (Iterator<ECKey> i = keys.iterator(); i.hasNext();) {
             DeterministicKey parent = ((DeterministicKey) i.next()).getParent();
-            if (parent == null || !externalKey.equals(parent))
+            if (parent == null || !externalParentKey.equals(parent))
                 i.remove();
         }
         return keys;
@@ -1634,13 +1637,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                     Utils.dateTimeFormat(seed.getCreationTimeSeconds() * 1000)));
         }
         final DeterministicKey watchingKey = getWatchingKey();
-        // Don't show if it's been imported from a watching wallet already, because it'd result in a weird/
-        // unintuitive result where the watching key in a watching wallet is not the one it was created with
-        // due to the parent fingerprint being missing/not stored. In future we could store the parent fingerprint
-        // optionally as well to fix this, but it seems unimportant for now.
-        if (watchingKey.getParent() != null) {
-            builder2.append(String.format("Key to watch:  %s%n", watchingKey.serializePubB58(params)));
-        }
+        builder2.append(String.format("Key to watch:  %s%n", watchingKey.serializePubB58(params)));
         formatAddresses(includePrivateKeys, params, builder2);
         return builder2.toString();
     }

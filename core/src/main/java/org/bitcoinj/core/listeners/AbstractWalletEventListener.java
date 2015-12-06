@@ -14,16 +14,21 @@
  * limitations under the License.
  */
 
-package org.bitcoinj.core;
+package org.bitcoinj.core.listeners;
 
+import org.bitcoinj.core.Coin;
+import org.bitcoinj.core.ECKey;
+import org.bitcoinj.core.Transaction;
+import org.bitcoinj.core.Wallet;
 import org.bitcoinj.script.Script;
 import org.bitcoinj.wallet.AbstractKeyChainEventListener;
 
 import java.util.List;
 
 /**
- * Convenience implementation of {@link WalletEventListener}.
+ * Deprecated: implement the more specific event listener interfaces instead.
  */
+@Deprecated
 public abstract class AbstractWalletEventListener extends AbstractKeyChainEventListener implements WalletEventListener {
     @Override
     public void onCoinsReceived(Wallet wallet, Transaction tx, Coin prevBalance, Coin newBalance) {

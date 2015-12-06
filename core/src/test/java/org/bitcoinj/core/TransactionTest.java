@@ -1,24 +1,18 @@
 package org.bitcoinj.core;
 
-import org.bitcoinj.core.TransactionConfidence.ConfidenceType;
-import org.bitcoinj.params.UnitTestParams;
-import org.bitcoinj.script.Script;
-import org.bitcoinj.script.ScriptBuilder;
-import org.bitcoinj.testing.FakeTxBuilder;
-import org.junit.Before;
-import org.junit.Test;
-import org.easymock.EasyMock;
+import org.bitcoinj.core.TransactionConfidence.*;
+import org.bitcoinj.params.*;
+import org.bitcoinj.script.*;
+import org.bitcoinj.testing.*;
+import org.easymock.*;
+import org.junit.*;
 
-import static org.junit.Assert.assertEquals;
-import static org.easymock.EasyMock.createMock;
-import static org.easymock.EasyMock.replay;
+import java.util.*;
+import static org.bitcoinj.core.BlockTest.params;
+import static org.bitcoinj.core.Utils.HEX;
 
-import java.util.Calendar;
-import java.util.Date;
-import java.util.Iterator;
-import java.util.List;
-import java.util.SortedSet;
-import java.util.TreeSet;
+import static org.easymock.EasyMock.*;
+import static org.junit.Assert.*;
 
 /**
  * Just check the Transaction.verify() method. Most methods that have complicated logic in Transaction are tested
@@ -35,6 +29,7 @@ public class TransactionTest {
 
     @Before
     public void setUp() throws Exception {
+        Context context = new Context(PARAMS);
         dummy = FakeTxBuilder.createFakeTx(PARAMS, Coin.COIN, ADDRESS);
         tx = newTransaction();
     }
@@ -283,6 +278,7 @@ public class TransactionTest {
         assertEquals(iterator.hasNext(), false);
     }
 
+
     @Test(expected = ScriptException.class)
     public void testAddSignedInputThrowsExceptionWhenScriptIsNotToRawPubKeyAndIsNotToAddress() {
         ECKey key = new ECKey();
@@ -295,5 +291,46 @@ public class TransactionTest {
         Script script = ScriptBuilder.createOpReturnScript(new byte[0]);
 
         tx.addSignedInput(fakeTx.getOutput(0).getOutPointFor(), script, key);
+    }
+
+    @Test
+    public void testPrioSizeCalc() throws Exception {
+        Transaction tx1 = FakeTxBuilder.createFakeTx(PARAMS, Coin.COIN, ADDRESS);
+        int size1 = tx1.getMessageSize();
+        int size2 = tx1.getMessageSizeForPriorityCalc();
+        assertEquals(113, size1 - size2);
+        tx1.getInput(0).setScriptSig(new Script(new byte[109]));
+        assertEquals(78, tx1.getMessageSizeForPriorityCalc());
+        tx1.getInput(0).setScriptSig(new Script(new byte[110]));
+        assertEquals(78, tx1.getMessageSizeForPriorityCalc());
+        tx1.getInput(0).setScriptSig(new Script(new byte[111]));
+        assertEquals(79, tx1.getMessageSizeForPriorityCalc());
+    }
+
+    @Test
+    public void testCoinbaseHeightCheck() throws VerificationException {
+        // Coinbase transaction from block 300,000
+        final byte[] transactionBytes = HEX.decode("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff4803e09304062f503253482f0403c86d53087ceca141295a00002e522cfabe6d6d7561cf262313da1144026c8f7a43e3899c44f6145f39a36507d36679a8b7006104000000000000000000000001c8704095000000001976a91480ad90d403581fa3bf46086a91b2d9d4125db6c188ac00000000");
+        final int height = 300000;
+        final Transaction transaction = params.getDefaultSerializer().makeTransaction(transactionBytes);
+        transaction.checkCoinBaseHeight(height);
+    }
+
+    /**
+     * Test a coinbase transaction whose script has nonsense after the block height.
+     * See https://github.com/bitcoinj/bitcoinj/issues/1097
+     */
+    @Test
+    public void testCoinbaseHeightCheckWithDamagedScript() throws VerificationException {
+        // Coinbase transaction from block 224,430
+        final byte[] transactionBytes = HEX.decode(
+            "010000000100000000000000000000000000000000000000000000000000000000"
+            + "00000000ffffffff3b03ae6c0300044bd7031a0400000000522cfabe6d6d0000"
+            + "0000000000b7b8bf0100000068692066726f6d20706f6f6c7365727665726aac"
+            + "1eeeed88ffffffff01e0587597000000001976a91421c0d001728b3feaf11551"
+            + "5b7c135e779e9f442f88ac00000000");
+        final int height = 224430;
+        final Transaction transaction = params.getDefaultSerializer().makeTransaction(transactionBytes);
+        transaction.checkCoinBaseHeight(height);
     }
 }

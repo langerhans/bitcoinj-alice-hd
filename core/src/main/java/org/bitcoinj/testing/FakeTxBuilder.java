@@ -25,6 +25,7 @@ import org.bitcoinj.store.BlockStoreException;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.Random;
 
 import static org.bitcoinj.core.Coin.*;
 
@@ -47,6 +48,42 @@ public class FakeTxBuilder {
         // Connect it.
         t.addInput(prevOut).setScriptSig(ScriptBuilder.createInputScript(TransactionSignature.dummy()));
         // Fake signature.
+        // Serialize/deserialize to ensure internal state is stripped, as if it had been read from the wire.
+        return roundTripTransaction(params, t);
+    }
+
+    /**
+     * Create a fake TX for unit tests, for use with unit tests that need greater control. One outputs, 2 random inputs,
+     * split randomly to create randomness.
+     */
+    public static Transaction createFakeTxWithoutChangeAddress(NetworkParameters params, Coin value, Address to) {
+        Transaction t = new Transaction(params);
+        TransactionOutput outputToMe = new TransactionOutput(params, t, value, to);
+        t.addOutput(outputToMe);
+
+        // Make a random split in the output value so we get a distinct hash when we call this multiple times with same args
+        long split = new Random().nextLong();
+        if (split < 0) { split *= -1; }
+        if (split == 0) { split = 15; }
+        while (split > value.getValue()) {
+            split /= 2;
+        }
+
+        // Make a previous tx simply to send us sufficient coins. This prev tx is not really valid but it doesn't
+        // matter for our purposes.
+        Transaction prevTx1 = new Transaction(params);
+        TransactionOutput prevOut1 = new TransactionOutput(params, prevTx1, Coin.valueOf(split), to);
+        prevTx1.addOutput(prevOut1);
+        // Connect it.
+        t.addInput(prevOut1).setScriptSig(ScriptBuilder.createInputScript(TransactionSignature.dummy()));
+        // Fake signature.
+
+        // Do it again
+        Transaction prevTx2 = new Transaction(params);
+        TransactionOutput prevOut2 = new TransactionOutput(params, prevTx2, Coin.valueOf(value.getValue() - split), to);
+        prevTx2.addOutput(prevOut2);
+        t.addInput(prevOut2).setScriptSig(ScriptBuilder.createInputScript(TransactionSignature.dummy()));
+
         // Serialize/deserialize to ensure internal state is stripped, as if it had been read from the wire.
         return roundTripTransaction(params, t);
     }
@@ -116,7 +153,7 @@ public class FakeTxBuilder {
      */
     public static Transaction roundTripTransaction(NetworkParameters params, Transaction tx) {
         try {
-            BitcoinSerializer bs = new BitcoinSerializer(params);
+            MessageSerializer bs = params.getDefaultSerializer();
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
             bs.serialize(tx, bos);
             return (Transaction) bs.deserialize(ByteBuffer.wrap(bos.toByteArray()));
@@ -138,13 +175,13 @@ public class FakeTxBuilder {
         Coin value = COIN;
         Address someBadGuy = new ECKey().toAddress(params);
 
-        doubleSpends.t1 = new Transaction(params);
-        TransactionOutput o1 = new TransactionOutput(params, doubleSpends.t1, value, to);
-        doubleSpends.t1.addOutput(o1);
-
         doubleSpends.prevTx = new Transaction(params);
         TransactionOutput prevOut = new TransactionOutput(params, doubleSpends.prevTx, value, someBadGuy);
         doubleSpends.prevTx.addOutput(prevOut);
+
+        doubleSpends.t1 = new Transaction(params);
+        TransactionOutput o1 = new TransactionOutput(params, doubleSpends.t1, value, to);
+        doubleSpends.t1.addOutput(o1);
         doubleSpends.t1.addInput(prevOut);
 
         doubleSpends.t2 = new Transaction(params);
@@ -153,8 +190,8 @@ public class FakeTxBuilder {
         doubleSpends.t2.addOutput(o2);
 
         try {
-            doubleSpends.t1 = new Transaction(params, doubleSpends.t1.bitcoinSerialize());
-            doubleSpends.t2 = new Transaction(params, doubleSpends.t2.bitcoinSerialize());
+            doubleSpends.t1 = params.getDefaultSerializer().makeTransaction(doubleSpends.t1.bitcoinSerialize());
+            doubleSpends.t2 = params.getDefaultSerializer().makeTransaction(doubleSpends.t2.bitcoinSerialize());
         } catch (ProtocolException e) {
             throw new RuntimeException(e);
         }
@@ -167,11 +204,19 @@ public class FakeTxBuilder {
     }
 
     /** Emulates receiving a valid block that builds on top of the chain. */
-    public static BlockPair createFakeBlock(BlockStore blockStore, long timeSeconds, Transaction... transactions) {
+    public static BlockPair createFakeBlock(BlockStore blockStore, long version,
+                                            long timeSeconds, Transaction... transactions) {
+        return createFakeBlock(blockStore, version, timeSeconds, 0, transactions);
+    }
+
+    /** Emulates receiving a valid block */
+    public static BlockPair createFakeBlock(BlockStore blockStore, StoredBlock previousStoredBlock, long version,
+                                            long timeSeconds, int height,
+                                            Transaction... transactions) {
         try {
-            Block chainHead = blockStore.getChainHead().getHeader();
-            Address to = new ECKey().toAddress(chainHead.getParams());
-            Block b = chainHead.createNextBlock(to, timeSeconds);
+            Block previousBlock = previousStoredBlock.getHeader();
+            Address to = new ECKey().toAddress(previousBlock.getParams());
+            Block b = previousBlock.createNextBlock(to, version, timeSeconds, height);
             // Coinbase tx was already added.
             for (Transaction tx : transactions) {
                 tx.getConfidence().setSource(TransactionConfidence.Source.NETWORK);
@@ -180,7 +225,7 @@ public class FakeTxBuilder {
             b.solve();
             BlockPair pair = new BlockPair();
             pair.block = b;
-            pair.storedBlock = blockStore.getChainHead().build(b);
+            pair.storedBlock = previousStoredBlock.build(b);
             blockStore.put(pair.storedBlock);
             blockStore.setChainHead(pair.storedBlock);
             return pair;
@@ -191,8 +236,28 @@ public class FakeTxBuilder {
         }
     }
 
+    public static BlockPair createFakeBlock(BlockStore blockStore, StoredBlock previousStoredBlock, int height, Transaction... transactions) {
+        return createFakeBlock(blockStore, previousStoredBlock, Block.BLOCK_VERSION_BIP66, Utils.currentTimeSeconds(), height, transactions);
+    }
+
+    /** Emulates receiving a valid block that builds on top of the chain. */
+    public static BlockPair createFakeBlock(BlockStore blockStore, long version, long timeSeconds, int height, Transaction... transactions) {
+        try {
+            return createFakeBlock(blockStore, blockStore.getChainHead(), version, timeSeconds, height, transactions);
+        } catch (BlockStoreException e) {
+            throw new RuntimeException(e);  // Cannot happen.
+        }
+    }
+
+    /** Emulates receiving a valid block that builds on top of the chain. */
+    public static BlockPair createFakeBlock(BlockStore blockStore, int height,
+                                            Transaction... transactions) {
+        return createFakeBlock(blockStore, Block.BLOCK_VERSION_GENESIS, Utils.currentTimeSeconds(), height, transactions);
+    }
+
+    /** Emulates receiving a valid block that builds on top of the chain. */
     public static BlockPair createFakeBlock(BlockStore blockStore, Transaction... transactions) {
-        return createFakeBlock(blockStore, Utils.currentTimeSeconds(), transactions);
+        return createFakeBlock(blockStore, Block.BLOCK_VERSION_GENESIS, Utils.currentTimeSeconds(), 0, transactions);
     }
 
     public static Block makeSolvedTestBlock(BlockStore blockStore, Address coinsTo) throws BlockStoreException {

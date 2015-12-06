@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright 2013 Matija Mazi.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,7 +21,6 @@ import com.google.common.collect.Maps;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.Serializable;
 import java.util.List;
 import java.util.Map;
 
@@ -42,7 +41,7 @@ import static com.google.common.base.Preconditions.checkArgument;
  * <p>The hierarchy is started from a single root key, and a location in the tree is given by a path which
  * is a list of {@link ChildNumber}s.</p>
  */
-public class DeterministicHierarchy implements Serializable {
+public class DeterministicHierarchy {
     private static final Logger log = LoggerFactory.getLogger(DeterministicHierarchy.class);
 
     private final Map<ImmutableList<ChildNumber>, DeterministicKey> keys = Maps.newHashMap();

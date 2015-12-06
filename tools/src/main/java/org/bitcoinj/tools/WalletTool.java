@@ -50,6 +50,9 @@ import joptsimple.OptionSet;
 import joptsimple.OptionSpec;
 import joptsimple.util.DateConverter;
 
+import org.bitcoinj.core.listeners.AbstractPeerDataEventListener;
+import org.bitcoinj.core.listeners.AbstractWalletEventListener;
+import org.bitcoinj.core.listeners.DownloadProgressTracker;
 import org.bitcoinj.wallet.MarriedKeyChain;
 import org.bitcoinj.wallet.Protos;
 import org.slf4j.Logger;
@@ -174,6 +177,7 @@ public class WalletTool {
         DECRYPT,
         MARRY,
         ROTATE,
+        SET_CREATION_TIME,
     }
 
     public enum WaitForEnum {
@@ -181,13 +185,6 @@ public class WalletTool {
         WALLET_TX,
         BLOCK,
         BALANCE
-    }
-    
-    public enum NetworkEnum {
-        MAIN,
-        PROD, // alias for MAIN
-        TEST,
-        REGTEST
     }
 
     public enum ValidationMode {
@@ -203,7 +200,7 @@ public class WalletTool {
         OptionSpec<String> walletFileName = parser.accepts("wallet").withRequiredArg().defaultsTo("wallet");
         seedFlag = parser.accepts("seed").withRequiredArg();
         watchFlag = parser.accepts("watchkey").withRequiredArg();
-        OptionSpec<NetworkEnum> netFlag = parser.accepts("net").withOptionalArg().ofType(NetworkEnum.class).defaultsTo(NetworkEnum.MAIN);
+        OptionSpec<NetworkEnum> netFlag = parser.accepts("net").withRequiredArg().ofType(NetworkEnum.class).defaultsTo(NetworkEnum.MAIN);
         dateFlag = parser.accepts("date").withRequiredArg().ofType(Date.class)
                 .withValuesConvertedBy(DateConverter.datePattern("yyyy/MM/dd"));
         OptionSpec<WaitForEnum> waitForFlag = parser.accepts("waitfor").withRequiredArg().ofType(WaitForEnum.class);
@@ -233,11 +230,9 @@ public class WalletTool {
         parser.accepts("dump-privkeys");
         options = parser.parse(args);
 
-        final String HELP_TEXT = Resources.toString(WalletTool.class.getResource("wallet-tool-help.txt"), Charsets.UTF_8);
-
         if (args.length == 0 || options.has("help") ||
                 options.nonOptionArguments().size() < 1 || options.nonOptionArguments().contains("help")) {
-            System.out.println(HELP_TEXT);
+            System.out.println(Resources.toString(WalletTool.class.getResource("wallet-tool-help.txt"), Charsets.UTF_8));
             return;
         }
 
@@ -317,11 +312,14 @@ public class WalletTool {
 
         InputStream walletInputStream = null;
         try {
+            boolean forceReset = action == ActionEnum.RESET
+                || (action == ActionEnum.SYNC
+                    && options.has("force"));
             WalletProtobufSerializer loader = new WalletProtobufSerializer();
             if (options.has("ignore-mandatory-extensions"))
                 loader.setRequireMandatoryExtensions(false);
             walletInputStream = new BufferedInputStream(new FileInputStream(walletFile));
-            wallet = loader.readWallet(walletInputStream);
+            wallet = loader.readWallet(walletInputStream, forceReset, (WalletExtension[])(null));
             if (!wallet.getParams().equals(params)) {
                 System.err.println("Wallet does not match requested network parameters: " +
                         wallet.getParams().getId() + " vs " + params.getId());
@@ -372,13 +370,14 @@ public class WalletTool {
             case DECRYPT: decrypt(); break;
             case MARRY: marry(); break;
             case ROTATE: rotate(); break;
+            case SET_CREATION_TIME: setCreationTime(); break;
         }
 
         if (!wallet.isConsistent()) {
             System.err.println("************** WALLET IS INCONSISTENT *****************");
             return;
         }
-        
+
         saveWallet(walletFile);
 
         if (options.has(waitForFlag)) {
@@ -501,7 +500,7 @@ public class WalletTool {
             return;
         }
         try {
-            Address address = new Address(params, addr);
+            Address address = Address.fromBase58(params, addr);
             // If no creation time is specified, assume genesis (zero).
             wallet.addWatchedAddress(address, getCreationTimeSeconds());
         } catch (AddressFormatException e) {
@@ -533,7 +532,7 @@ public class WalletTool {
                         t.addOutput(value, key);
                     } else {
                         // Treat as an address.
-                        Address addr = new Address(params, destination);
+                        Address addr = Address.fromBase58(params, destination);
                         t.addOutput(value, addr);
                     }
                 } catch (WrongNetworkException e) {
@@ -760,7 +759,7 @@ public class WalletTool {
                 break;
 
             case BLOCK:
-                peers.addEventListener(new AbstractPeerEventListener() {
+                peers.addDataEventListener(new AbstractPeerDataEventListener() {
                     @Override
                     public void onBlocksDownloaded(Peer peer, Block block, @Nullable FilteredBlock filteredBlock, int blocksLeft) {
                         // Check if we already ran. This can happen if a block being received triggers download of more
@@ -953,7 +952,7 @@ public class WalletTool {
             if (options.has(lookaheadSize)) {
                 Integer size = options.valueOf(lookaheadSize);
                 log.info("Setting keychain lookahead size to {}", size);
-                wallet.setKeychainLookaheadSize(size);
+                wallet.setKeyChainGroupLookaheadSize(size);
             }
             ECKey key;
             try {
@@ -995,7 +994,7 @@ public class WalletTool {
             if (data.startsWith("5J") || data.startsWith("5H") || data.startsWith("5K")) {
                 DumpedPrivateKey dpk;
                 try {
-                    dpk = new DumpedPrivateKey(params, data);
+                    dpk = DumpedPrivateKey.fromBase58(params, data);
                 } catch (AddressFormatException e) {
                     System.err.println("Could not parse dumped private key " + data);
                     return;
@@ -1061,7 +1060,7 @@ public class WalletTool {
             key = wallet.findKeyFromPubKey(Hex.decode(pubkey));
         } else {
             try {
-                Address address = new Address(wallet.getParams(), addr);
+                Address address = Address.fromBase58(wallet.getParams(), addr);
                 key = wallet.findKeyFromPubHash(address.getHash160());
             } catch (AddressFormatException e) {
                 System.err.println(addr + " does not parse as a Bitcoin address of the right network parameters.");
@@ -1086,5 +1085,19 @@ public class WalletTool {
         if (chainFileName.exists())
             setup();
         System.out.println(wallet.toString(options.has("dump-privkeys"), true, true, chain));
+    }
+
+    private static void setCreationTime() {
+        DeterministicSeed seed = wallet.getActiveKeyChain().getSeed();
+        if (seed == null) {
+            System.err.println("Active chain does not have a seed.");
+            return;
+        }
+        long creationTime = getCreationTimeSeconds();
+        if (creationTime > 0)
+            System.out.println("Setting creation time to: " + Utils.dateTimeFormat(creationTime * 1000));
+        else
+            System.out.println("Clearing creation time.");
+        seed.setCreationTimeSeconds(creationTime);
     }
 }

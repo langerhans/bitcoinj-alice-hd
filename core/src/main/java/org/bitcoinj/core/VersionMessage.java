@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright 2011 Google Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,6 +16,7 @@
 
 package org.bitcoinj.core;
 
+import com.google.common.base.Objects;
 import javax.annotation.Nullable;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -32,7 +33,6 @@ import java.net.UnknownHostException;
  * to ensure it will be used for each new connection.
  */
 public class VersionMessage extends Message {
-    private static final long serialVersionUID = 7313594258967483180L;
 
     /** A services flag that denotes whether the peer has a copy of the block chain or not. */
     public static final int NODE_NETWORK = 1;
@@ -61,7 +61,7 @@ public class VersionMessage extends Message {
     public PeerAddress theirAddr;
     /**
      * User-Agent as defined in <a href="https://github.com/bitcoin/bips/blob/master/bip-0014.mediawiki">BIP 14</a>.
-     * The official client sets it to something like "/Satoshi:0.9.1/".
+     * Bitcoin Core sets it to something like "/Satoshi:0.9.1/".
      */
     public String subVer;
     /**
@@ -75,7 +75,7 @@ public class VersionMessage extends Message {
     public boolean relayTxesBeforeFilter;
 
     /** The version of this library release, as a string. */
-    public static final String BITCOINJ_VERSION = "0.13.3";
+    public static final String BITCOINJ_VERSION = "0.14-SNAPSHOT";
     /** The value that is prepended to the subVer field of this application. */
     public static final String LIBRARY_SUBVER = "/bitcoinj:" + BITCOINJ_VERSION + "/";
 
@@ -89,10 +89,10 @@ public class VersionMessage extends Message {
     
     public VersionMessage(NetworkParameters params, int newBestHeight) {
         super(params);
-        clientVersion = NetworkParameters.PROTOCOL_VERSION;
+        clientVersion = params.getProtocolVersionNum(NetworkParameters.ProtocolVersion.CURRENT);
         localServices = 0;
         time = System.currentTimeMillis() / 1000;
-        // Note that the official client doesn't do anything with these, and finding out your own external IP address
+        // Note that the Bitcoin Core doesn't do anything with these, and finding out your own external IP address
         // is kind of tricky anyway, so we just put nonsense here for now.
         try {
             // We hard-code the IPv4 localhost address here rather than use InetAddress.getLocalHost() because some
@@ -114,16 +114,7 @@ public class VersionMessage extends Message {
     }
 
     @Override
-    protected void parseLite() throws ProtocolException {
-        // NOP.  VersionMessage is never lazy parsed.
-    }
-
-    @Override
-    public void parse() throws ProtocolException {
-        if (parsed)
-            return;
-        parsed = true;
-
+    protected void parse() throws ProtocolException {
         clientVersion = (int) readUint32();
         localServices = readUint64().longValue();
         time = readUint64().longValue();
@@ -212,24 +203,8 @@ public class VersionMessage extends Message {
 
     @Override
     public int hashCode() {
-        return (int) bestHeight ^ clientVersion ^ (int) localServices ^ (int) time ^ subVer.hashCode() ^ myAddr.hashCode()
-            ^ theirAddr.hashCode() * (relayTxesBeforeFilter ? 1 : 2);
-    }
-
-    /**
-     * VersionMessage does not handle cached byte array so should not have a cached checksum.
-     */
-    @Override
-    byte[] getChecksum() {
-        throw new UnsupportedOperationException();
-    }
-
-    /**
-     * VersionMessage does not handle cached byte array so should not have a cached checksum.
-     */
-    @Override
-    void setChecksum(byte[] checksum) {
-        throw new UnsupportedOperationException();
+        return Objects.hashCode(bestHeight, clientVersion, localServices,
+            time, subVer, myAddr, theirAddr, relayTxesBeforeFilter);
     }
 
     @Override
@@ -261,8 +236,8 @@ public class VersionMessage extends Message {
 
     /**
      * Appends the given user-agent information to the subVer field. The subVer is composed of a series of
-     * name:version pairs separated by slashes in the form of a path. For example a typical subVer field for BitCoinJ
-     * users might look like "/BitCoinJ:0.4-SNAPSHOT/MultiBit:1.2/" where libraries come further to the left.<p>
+     * name:version pairs separated by slashes in the form of a path. For example a typical subVer field for bitcoinj
+     * users might look like "/bitcoinj:0.13/MultiBit:1.2/" where libraries come further to the left.<p>
      *
      * There can be as many components as you feel a need for, and the version string can be anything, but it is
      * recommended to use A.B.C where A = major, B = minor and C = revision for software releases, and dates for
@@ -271,7 +246,7 @@ public class VersionMessage extends Message {
      *
      * Anything put in the "comments" field will appear in brackets and may be used for platform info, or anything
      * else. For example, calling <tt>appendToSubVer("MultiBit", "1.0", "Windows")</tt> will result in a subVer being
-     * set of "/BitCoinJ:1.0/MultiBit:1.0(Windows)/". Therefore the / ( and ) characters are reserved in all these
+     * set of "/bitcoinj:1.0/MultiBit:1.0(Windows)/". Therefore the / ( and ) characters are reserved in all these
      * components. If you don't want to add a comment (recommended), pass null.<p>
      *
      * See <a href="https://github.com/bitcoin/bips/blob/master/bip-0014.mediawiki">BIP 14</a> for more information.
@@ -299,7 +274,7 @@ public class VersionMessage extends Message {
      * Returns true if the clientVersion field is >= Pong.MIN_PROTOCOL_VERSION. If it is then ping() is usable.
      */
     public boolean isPingPongSupported() {
-        return clientVersion >= Pong.MIN_PROTOCOL_VERSION;
+        return clientVersion >= params.getProtocolVersionNum(NetworkParameters.ProtocolVersion.PONG);
     }
 
     /**
@@ -307,7 +282,7 @@ public class VersionMessage extends Message {
      * is available and the memory pool of the remote peer will be queried when the downloadData property is true.
      */
     public boolean isBloomFilteringSupported() {
-        return clientVersion >= FilteredBlock.MIN_PROTOCOL_VERSION;
+        return clientVersion >= params.getProtocolVersionNum(NetworkParameters.ProtocolVersion.BLOOM_FILTER);
     }
 
     /** Returns true if the protocol version and service bits both indicate support for the getutxos message. */

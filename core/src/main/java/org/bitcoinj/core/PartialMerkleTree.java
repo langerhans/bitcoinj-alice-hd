@@ -1,6 +1,7 @@
 /**
  * Copyright 2012 The Bitcoin Developers
  * Copyright 2012 Matt Corallo
+ * Copyright 2015 Andreas Schildbach
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,6 +25,7 @@ import java.util.Arrays;
 import java.util.List;
 
 import static org.bitcoinj.core.Utils.*;
+import com.google.common.base.Objects;
 
 /**
  * <p>A data structure that contains proofs of block inclusion for one or more transactions, in an efficient manner.</p>
@@ -108,7 +110,7 @@ public class PartialMerkleTree extends Message {
     }
 
     @Override
-    void parse() throws ProtocolException {
+    protected void parse() throws ProtocolException {
         transactionCount = (int)readUint32();
 
         int nHashes = (int) readVarInt();
@@ -166,11 +168,6 @@ public class PartialMerkleTree extends Message {
         return combineLeftRight(left.getBytes(), right.getBytes());
     }
 
-    @Override
-    protected void parseLite() {
-        
-    }
-    
     // helper function to efficiently calculate the number of nodes at given height in the merkle tree
     private static int getTreeWidth(int transactionCount, int height) {
         return (transactionCount + (1 << height) - 1) >> height;
@@ -269,22 +266,14 @@ public class PartialMerkleTree extends Message {
     public boolean equals(Object o) {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
-
-        PartialMerkleTree tree = (PartialMerkleTree) o;
-
-        if (transactionCount != tree.transactionCount) return false;
-        if (!hashes.equals(tree.hashes)) return false;
-        if (!Arrays.equals(matchedChildBits, tree.matchedChildBits)) return false;
-
-        return true;
+        PartialMerkleTree other = (PartialMerkleTree) o;
+        return transactionCount == other.transactionCount && hashes.equals(other.hashes)
+            && Arrays.equals(matchedChildBits, other.matchedChildBits);
     }
 
     @Override
     public int hashCode() {
-        int result = transactionCount;
-        result = 31 * result + Arrays.hashCode(matchedChildBits);
-        result = 31 * result + hashes.hashCode();
-        return result;
+        return Objects.hashCode(transactionCount, hashes, Arrays.hashCode(matchedChildBits));
     }
 
     @Override
