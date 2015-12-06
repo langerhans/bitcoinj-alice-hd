@@ -3078,6 +3078,19 @@ public class Wallet extends BaseTaggableObject
     }
 
     /**
+     * Set the key creation time
+     * @param keyCreationTimeSeconds the key creation time in seconds
+     */
+    public void setEarliestKeyCreationTime(long keyCreationTimeSeconds) {
+        keyChainGroupLock.lock();
+        try {
+            keyChainGroup.setEarliestKeyCreationTime(keyCreationTimeSeconds);
+        } finally {
+            keyChainGroupLock.unlock();
+        }
+    }
+
+    /**
      * Returns the earliest creation time of keys or watched scripts in this wallet, in seconds since the epoch, ie the min
      * of {@link org.bitcoinj.core.ECKey#getCreationTimeSeconds()}. This can return zero if at least one key does
      * not have that data (was created before key timestamping was implemented). <p>
